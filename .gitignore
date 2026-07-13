@@ -1,0 +1,44 @@
+# Dependencies and build output
+node_modules/
+.next/
+dist/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+secrets/*
+!secrets/README.md
+!secrets/*.enc.yaml
+!secrets/*.enc.json
+
+# Runtime data
+*.log
+*.pid
+*.pid.lock
+tmp/
+temp/
+uploads/
+backups/
+*.sql
+*.dump
+
+# Local tooling
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Private operational state never enters the public mirror
+internal/runtime/

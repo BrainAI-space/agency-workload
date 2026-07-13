@@ -1,0 +1,44 @@
+{
+  "name": "agency-workload",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Open-source resource and capacity planning for agencies and service teams.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=24.0.0 <27",
+    "npm": ">=11.0.0"
+  },
+  "packageManager": "npm@11.13.0",
+  "overrides": {
+    "postcss": "8.5.19"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "check": "biome check .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "lint": "biome lint .",
+    "test": "npm run test --workspaces --if-present",
+    "test:coverage": "npm run test:coverage --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "public:sync": "node tools/sync-public.mjs",
+    "public:verify": "node tools/verify-public.mjs",
+    "verify:workspaces": "node tools/verify-workspaces.mjs",
+    "verify": "npm run verify:workspaces && npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build && npm audit --audit-level=moderate"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.3",
+    "@playwright/test": "1.61.1",
+    "@types/node": "24.13.3",
+    "@vitest/coverage-v8": "4.1.10",
+    "fast-check": "4.9.0",
+    "tsx": "4.23.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  }
+}
