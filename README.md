@@ -37,7 +37,8 @@ npm ci
 npm run verify
 ```
 
-Local database and authentication setup will be documented before the first usable milestone.
+Local database, GoTrue, and Mailpit setup is documented in
+[`docs/local-infrastructure.md`](docs/local-infrastructure.md).
 
 ## Security
 

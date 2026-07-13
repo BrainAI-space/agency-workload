@@ -4,7 +4,7 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import { Type } from "@sinclair/typebox";
-import Fastify, { LogController, type FastifyServerOptions } from "fastify";
+import Fastify, { type FastifyServerOptions, LogController } from "fastify";
 
 export interface BuildAppOptions {
   logger?: FastifyServerOptions["logger"];
