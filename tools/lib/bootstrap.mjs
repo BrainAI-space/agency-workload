@@ -8,6 +8,7 @@ import {
   createServiceRoleToken,
   databaseUrlRules,
   directSecretKeys,
+  expectedLocal,
   expectedOrigins,
   expectedTarget,
   isPlaceholder,
@@ -104,6 +105,13 @@ export function createLocalEnvironment(
       isPlaceholder(values.get(key)) ||
       values.get(key) === legacyOrigins.get(key)
     ) {
+      values.set(key, value);
+      changedKeys.add(key);
+    }
+  }
+
+  for (const [key, value] of Object.entries(expectedLocal)) {
+    if (!values.has(key) || isPlaceholder(values.get(key))) {
       values.set(key, value);
       changedKeys.add(key);
     }

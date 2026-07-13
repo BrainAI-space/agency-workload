@@ -26,6 +26,9 @@
     "test": "npm run test:tools && npm run test --workspaces --if-present",
     "test:tools": "node --test tools/test/config.test.mjs tools/test/bootstrap-local.test.mjs tools/test/redact.test.mjs",
     "test:bootstrap:integration": "node tools/test/bootstrap.integration.mjs --integration",
+    "test:db:integration": "node --env-file=.env tools/run-db-integration.mjs",
+    "test:auth:integration": "node --env-file=.env tools/run-auth-integration.mjs",
+    "test:admin:integration": "node --env-file=.env tools/run-admin-integration.mjs",
     "test:coverage": "npm run test:coverage --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "public:sync": "node tools/sync-public.mjs",
@@ -39,6 +42,8 @@
     "auth:logs": "node tools/auth-logs.mjs",
     "auth:health": "node tools/check-local-services.mjs",
     "security:check:local": "node tools/verify-secret-safety.mjs",
+    "db:migrate": "node --env-file=.env --import tsx packages/db/src/cli.ts",
+    "auth:bootstrap-owner": "node --env-file=.env --import tsx apps/api/src/bootstrap-owner.ts",
     "verify:workspaces": "node tools/verify-workspaces.mjs",
     "verify": "npm run verify:workspaces && npm run config:check && npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build && npm audit --audit-level=moderate"
   },

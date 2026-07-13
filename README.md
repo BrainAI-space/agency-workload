@@ -30,6 +30,9 @@ Requirements:
 - PostgreSQL 16
 - Docker for local Supabase Auth and Mailpit
 
+The Vite application runs on `localhost:3100` and proxies `/api` only to Fastify on
+`127.0.0.1:4100`.
+
 Install and verify the current foundation:
 
 ```bash
@@ -39,6 +42,8 @@ npm run verify
 
 Local database, GoTrue, and Mailpit setup is documented in
 [`docs/local-infrastructure.md`](docs/local-infrastructure.md).
+The invitation-only OTP, opaque session, CSRF, RBAC, and admin API boundary is documented in
+[`docs/authentication.md`](docs/authentication.md).
 
 ## Security
 

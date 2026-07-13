@@ -14,6 +14,8 @@ npm run config:check
 npm run local:bootstrap
 npm run config:check:runtime
 npm run auth:up
+npm run db:migrate
+npm run auth:bootstrap-owner
 npm run auth:health
 ```
 
@@ -45,6 +47,7 @@ approved shared cluster was initialized without that role, so bootstrap also cre
 
 | Service | Host binding | Purpose |
 |---|---|---|
+| Fastify | `127.0.0.1:4100` | Sole browser API and authorization boundary |
 | GoTrue | `127.0.0.1:9999` | Backend auth integration and health checks |
 | Mailpit SMTP | `127.0.0.1:1025` | Local email capture |
 | Mailpit UI | `127.0.0.1:8025` | Inspect captured local email |
@@ -53,6 +56,9 @@ The application site is exactly `http://localhost:3100`. The only additional aut
 `http://localhost:3100/auth/confirm`; wildcard redirects are not allowed. Signup, autoconfirm,
 phone, anonymous, social, SAML, Web3, and custom OAuth providers are disabled. Refresh-token
 rotation is enabled with no reuse interval.
+
+Vite proxies browser `/api` traffic only to Fastify at `http://127.0.0.1:4100`. Browser code does not
+connect to GoTrue or PostgreSQL.
 
 GoTrue and Mailpit share a project-only bridge network. It is not an `internal` Docker network
 because GoTrue must reach the existing host PostgreSQL binding at `host.docker.internal:5434`.
@@ -67,9 +73,10 @@ restarts the services. The shared PostgreSQL superuser is deliberately outside t
 
 ## Production SMTP
 
-Deployed environments supply ZeptoMail through a private runtime secret store. The configuration
-names are `GOTRUE_SMTP_HOST`, `GOTRUE_SMTP_PORT`, `GOTRUE_SMTP_USER`, `GOTRUE_SMTP_PASS`,
-`GOTRUE_SMTP_ADMIN_EMAIL`, and `GOTRUE_SMTP_SENDER_NAME`. Values never belong in this repository.
+Production application mail is disabled in this milestone. Future deployments supply ZeptoMail
+through a private runtime secret store using `ZEPTO_SMTP_HOST`, `ZEPTO_SMTP_PORT`,
+`ZEPTO_SMTP_USER`, `ZEPTO_SMTP_PASS`, `ZEPTO_SMTP_FROM`, and `ZEPTO_SMTP_SENDER_NAME`. Values never
+belong in this repository.
 
 ## PostgreSQL Binding Blocker
 

@@ -1,8 +1,11 @@
 import { buildApp } from "./app.js";
+import { loadConfig } from "./config.js";
+import { createApplicationServices } from "./services.js";
 
 const port = Number(process.env.PORT ?? 4100);
 const host = process.env.HOST ?? "127.0.0.1";
-const app = await buildApp();
+const config = loadConfig();
+const app = await buildApp({ config, services: createApplicationServices(config) });
 
 const shutdown = async (signal: string) => {
   app.log.info({ signal }, "shutting down");

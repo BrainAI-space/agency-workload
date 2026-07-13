@@ -15,6 +15,15 @@ export const expectedOrigins = Object.freeze({
   MAILPIT_ORIGIN: "http://127.0.0.1:8025",
 });
 
+export const expectedLocal = Object.freeze({
+  APP_ENV: "development",
+  BOOTSTRAP_EMAIL: "owner@agency-workload.local",
+  SMTP_HOST: "127.0.0.1",
+  SMTP_PORT: "1025",
+  SMTP_FROM: "auth@agency-workload.local",
+  SMTP_SENDER_NAME: "Agency Workload",
+});
+
 export const databaseUrlRules = Object.freeze({
   DATABASE_URL: {
     username: "agency_workload_runtime",
@@ -45,6 +54,7 @@ export const configurationOrder = Object.freeze([
   ...Object.keys(expectedTarget),
   "",
   ...Object.keys(expectedOrigins),
+  ...Object.keys(expectedLocal),
   "",
   ...Object.keys(databaseUrlRules),
   "",
@@ -54,6 +64,7 @@ export const configurationOrder = Object.freeze([
 const requiredKeys = Object.freeze([
   ...Object.keys(expectedTarget),
   ...Object.keys(expectedOrigins),
+  ...Object.keys(expectedLocal),
   ...Object.keys(databaseUrlRules),
   ...directSecretKeys,
 ]);
@@ -196,6 +207,12 @@ export function validateConfiguration(values, { template }) {
   for (const [key, expected] of Object.entries(expectedOrigins)) {
     if (values.has(key) && values.get(key) !== expected) {
       failures.push(`${key} must be the exact local origin`);
+    }
+  }
+
+  for (const [key, expected] of Object.entries(expectedLocal)) {
+    if (values.has(key) && values.get(key) !== expected) {
+      failures.push(`${key} must use the fixed local value`);
     }
   }
 

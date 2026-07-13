@@ -3,7 +3,12 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { createServiceRoleToken, parseEnv, validateConfiguration } from "../lib/config.mjs";
+import {
+  createServiceRoleToken,
+  expectedLocal,
+  parseEnv,
+  validateConfiguration,
+} from "../lib/config.mjs";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -19,6 +24,7 @@ function runtimeConfiguration() {
     ["API_ORIGIN", "http://localhost:4100"],
     ["GOTRUE_ORIGIN", "http://127.0.0.1:9999"],
     ["MAILPIT_ORIGIN", "http://127.0.0.1:8025"],
+    ...Object.entries(expectedLocal),
     [
       "DATABASE_URL",
       `postgresql://agency_workload_runtime:${"r".repeat(40)}@127.0.0.1:5434/agency_workload`,
