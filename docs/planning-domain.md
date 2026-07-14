@@ -1,11 +1,9 @@
 # Planning Domain Core
 
-**Status:** Verified core boundary. Planner UI integration is deferred.
+**Status:** Verified V1 backend boundary. Planner UI integration is deferred.
 
-This milestone establishes deterministic calendar math, the complete V1 planning schema, and the
-core settings, people, project, allocation, and schedule APIs. Catalog administration, leave APIs,
-holiday APIs, clients, conflict acknowledgement, earliest-start HTTP, and forecast HTTP are
-deliberately deferred rather than exposed without complete authorization and integration coverage.
+This milestone establishes deterministic calendar math, the complete V1 planning schema, and the V1
+planning backend APIs. No planner UI is connected to these APIs yet.
 
 ## Calendar And Minutes
 
@@ -59,8 +57,9 @@ the requested workday count and daily available minutes under the confirmed or c
 tentative scenario. Weekends, holidays, and leave extend the completion date. A calendar gap longer
 than seven days breaks the sequence. Search is explicitly bounded to 1-730 calendar days.
 
-The engine is available for the future HTTP endpoint, but no earliest-start API is claimed in this
-boundary.
+`POST /api/v1/earliest-start` exposes this search with a 1-60 workday bound and maximum 365-day
+horizon. Results contain person, start/end, minimum headroom, and a stable explanation. Search never
+creates an allocation.
 
 ## Schema
 
@@ -81,7 +80,7 @@ planning relationships. Mutable records use positive `row_version` values. Sched
 transactional overlap trigger with a per-person advisory lock. Runtime and backup grants are applied
 without widening audit-table permissions.
 
-## Core HTTP Boundary
+## HTTP Boundary
 
 Implemented under `/api/v1`:
 
@@ -97,6 +96,13 @@ Implemented under `/api/v1`:
 - `GET|POST /allocations`
 - `PATCH|DELETE /allocations/:id`
 - `GET /schedule?start=...&end=...&scenario=...`
+- teams, delivery roles, and tags list/create/update/archive routes
+- clients list/create/update/archive routes
+- holiday calendar list/create/update/archive, holiday date add/remove, and person assignment routes
+- leave type list/create/update/archive and leave list/create/update/delete routes
+- `GET /conflicts` and acknowledge/unacknowledge routes
+- `POST /earliest-start`
+- `GET /forecast`
 
 All reads use the session organization. Cross-organization IDs return 404. Owner, admin, and planner
 can mutate core planning records; member and viewer are read-only for this boundary. Mutations require
@@ -115,9 +121,35 @@ target end requires a target start, and target ranges remain inclusive. Archive/
 the current civil date from the organization's validated IANA timezone. This avoids UTC boundary
 errors for organizations such as `America/Los_Angeles` and `Asia/Dhaka`.
 
-Member self-service leave is deferred until the leave API and its own-detail authorization matrix are
-implemented. The nullable `memberships.linked_person_id` schema support is present, but no partially
-protected leave endpoint is exposed.
+Catalog and holiday-calendar structure (calendars, dates, and person assignment) is owner/admin
+managed; every role can read active catalogs. Clients and arbitrary-person leave are
+owner/admin/planner managed. Members may
+create, update, and delete leave only for their active `memberships.linked_person_id`. Viewer leave
+responses, and member responses for other people, expose unavailable spans only: person and inclusive
+dates without leave type or partial-minute details. V1 stores no reason, medical note, balance, or
+approval state.
+
+Leave update and deletion authorize against the existing locked record, never the submitted person
+ID. A member cannot move a leave record to another person or take over another person's record.
+Planner/admin/owner reassignment requires an active same-organization person.
+
+Active-name duplicates for teams, delivery roles, tags, clients, holiday calendars, and leave types
+return stable 409 codes. Duplicate dates within a holiday calendar return `holiday_date_conflict`.
+
+One active holiday calendar can be assigned per person. Holiday and leave mutations affect the next
+schedule, conflict, earliest-start, and forecast calculation immediately.
+
+Current conflicts are derived for a bounded range and optional person/team/role filters. Responses
+identify confirmed or potential overbook, explain the capacity source, and carry stable fingerprints.
+Owner/admin/planner may acknowledge or unacknowledge a fingerprint; members/viewers read only. A
+changed source produces a new fingerprint. This API covers capacity overbooking only, not every
+possible business conflict.
+
+Forecast defaults to the organization's configured 13 weeks and is bounded at 52. Weeks use the
+organization timezone and week start. Each row contains effective capacity; confirmed and tentative
+billable/internal minutes; confirmed and potential utilization; overbook; and billable target gap.
+The response includes generation time and an assumptions sentence. It contains no rates, revenue, or
+other financial fields.
 
 ## Verification And Supported Dataset
 
@@ -125,8 +157,17 @@ protected leave endpoint is exposed.
 - two fixed-seed fast-check properties with 1,000 cases each
 - isolated fresh/up/rerun/checksum/rollback/grant migration tests
 - real PostgreSQL CRUD, concurrency, cross-organization, stale-write, guard, and audit rollback tests
-- HTTP validation, CSRF, status, and five-role matrix tests
+- HTTP validation, CSRF, status, redaction, and five-role matrix tests
 - local performance smoke: 100 people, 2,000 allocations, 52 weeks, threshold 1.5 seconds
 
 This is the only supported performance claim. Larger datasets and planner UI responsiveness have not
 been validated.
+
+## Remaining Deferrals
+
+- planner UI connection to these APIs
+- CSV import/export
+- leave balances, approvals, and sensitive reasons
+- automatic staffing or assignment
+- broader non-capacity business conflict types
+- financial forecasting

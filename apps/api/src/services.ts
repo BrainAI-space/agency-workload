@@ -1,7 +1,10 @@
 import { Pool } from "pg";
 import { AdminService } from "./admin-service.js";
 import { AuthService } from "./auth-service.js";
+import { CalendarService } from "./calendar-service.js";
+import { CatalogService } from "./catalog-service.js";
 import type { AppConfig } from "./config.js";
+import { DerivedService } from "./derived-service.js";
 import { GoTrueClient } from "./gotrue-client.js";
 import { FixedSmtpMailer } from "./mailer.js";
 import { PlanningService } from "./planning-service.js";
@@ -23,6 +26,9 @@ export interface ApplicationServices {
     | "revokeSession"
   >;
   planning: PlanningService;
+  catalog: CatalogService;
+  calendar: CalendarService;
+  derived: DerivedService;
   close(): Promise<void>;
 }
 
@@ -36,5 +42,8 @@ export function createApplicationServices(config: AppConfig): ApplicationService
   const auth = new AuthService(pool, config, gotrue, mailer);
   const admin = new AdminService(pool, auth);
   const planning = new PlanningService(pool);
-  return { auth, admin, planning, close: () => pool.end() };
+  const catalog = new CatalogService(pool);
+  const calendar = new CalendarService(pool);
+  const derived = new DerivedService(pool);
+  return { auth, admin, planning, catalog, calendar, derived, close: () => pool.end() };
 }

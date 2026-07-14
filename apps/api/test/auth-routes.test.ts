@@ -49,6 +49,9 @@ function services(role: AppRole = "owner"): ApplicationServices {
       readAudit: vi.fn(async () => []),
     },
     planning: {} as ApplicationServices["planning"],
+    catalog: {} as ApplicationServices["catalog"],
+    calendar: {} as ApplicationServices["calendar"],
+    derived: {} as ApplicationServices["derived"],
     close: vi.fn(async () => undefined),
   };
 }

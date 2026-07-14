@@ -19,6 +19,7 @@ import Fastify, { type FastifyRequest, type FastifyServerOptions, LogController 
 import type { SessionContext } from "./auth-service.js";
 import type { AppConfig } from "./config.js";
 import { HttpError } from "./errors.js";
+import { registerExtendedRoutes } from "./extended-routes.js";
 import { registerPlanningRoutes } from "./planning-routes.js";
 import type { ApplicationServices } from "./services.js";
 
@@ -332,6 +333,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
       async (request) => services.admin.readAudit(await sessionFor(request)),
     );
     registerPlanningRoutes(app, { planning: services.planning, sessionFor, csrfFor });
+    registerExtendedRoutes(app, {
+      catalog: services.catalog,
+      calendar: services.calendar,
+      derived: services.derived,
+      sessionFor,
+      csrfFor,
+    });
   }
 
   return app;

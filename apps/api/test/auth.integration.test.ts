@@ -157,7 +157,7 @@ describe.skipIf(!enabled)("GoTrue, Mailpit, and opaque session integration", () 
     expect(
       (await post("/api/v1/auth/verify-code", { email, code: captured.code })).statusCode,
     ).toBe(401);
-  }, 20_000);
+  }, 30_000);
 
   it("keeps unknown and disabled users generic and sends no email", async () => {
     await clearMail();
@@ -260,7 +260,7 @@ describe.skipIf(!enabled)("GoTrue, Mailpit, and opaque session integration", () 
       },
       body: JSON.stringify({ should_soft_delete: false }),
     });
-  }, 20_000);
+  }, 30_000);
 });
 
 function sessionOrganizationId(response: unknown): string {

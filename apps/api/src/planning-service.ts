@@ -23,6 +23,7 @@ export interface PersonInput {
   email?: string | null;
   teamId?: string | null;
   deliveryRoleId?: string | null;
+  tagIds?: readonly string[];
   activeFrom: string;
   activeUntil?: string | null;
 }
@@ -67,6 +68,7 @@ interface PersonResult {
   email: string | null;
   teamId: string | null;
   deliveryRoleId: string | null;
+  tagIds: string[];
   activeFrom: string;
   activeUntil: string | null;
   rowVersion: number;
@@ -211,10 +213,16 @@ export class PlanningService {
 
   async listPeople(actor: SessionContext) {
     const result = await this.pool.query<PersonResult>(
-      `SELECT id, name, email, team_id AS "teamId", delivery_role_id AS "deliveryRoleId",
+      `SELECT person.id, person.name, person.email, person.team_id AS "teamId",
+              person.delivery_role_id AS "deliveryRoleId",
               active_from::text AS "activeFrom", active_until::text AS "activeUntil",
-              row_version AS "rowVersion"
-       FROM app.people WHERE organization_id = $1 AND archived_at IS NULL ORDER BY name, id`,
+              row_version AS "rowVersion",
+              COALESCE(array_agg(person_tag.tag_id::text) FILTER (WHERE person_tag.tag_id IS NOT NULL), '{}') AS "tagIds"
+       FROM app.people person
+       LEFT JOIN app.person_tags person_tag
+         ON person_tag.organization_id = person.organization_id AND person_tag.person_id = person.id
+       WHERE person.organization_id = $1 AND person.archived_at IS NULL
+       GROUP BY person.organization_id, person.id ORDER BY person.name, person.id`,
       [actor.organizationId],
     );
     return result.rows.map((row) => this.projectPerson(row, actor));
@@ -222,10 +230,16 @@ export class PlanningService {
 
   async getPerson(actor: SessionContext, personId: string) {
     const person = await this.pool.query<PersonResult>(
-      `SELECT id, name, email, team_id AS "teamId", delivery_role_id AS "deliveryRoleId",
+      `SELECT person.id, person.name, person.email, person.team_id AS "teamId",
+              person.delivery_role_id AS "deliveryRoleId",
               active_from::text AS "activeFrom", active_until::text AS "activeUntil",
-              row_version AS "rowVersion"
-       FROM app.people WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL`,
+              row_version AS "rowVersion",
+              COALESCE(array_agg(person_tag.tag_id::text) FILTER (WHERE person_tag.tag_id IS NOT NULL), '{}') AS "tagIds"
+       FROM app.people person
+       LEFT JOIN app.person_tags person_tag
+         ON person_tag.organization_id = person.organization_id AND person_tag.person_id = person.id
+       WHERE person.organization_id = $1 AND person.id = $2 AND person.archived_at IS NULL
+       GROUP BY person.organization_id, person.id`,
       [actor.organizationId, personId],
     );
     if (!person.rows[0]) throw new HttpError(404, "person_not_found");
@@ -250,6 +264,12 @@ export class PlanningService {
     validateRange(input.activeFrom, input.activeUntil);
     validateWeekdays(schedule);
     return this.transaction(async (client) => {
+      await this.requireAssignableCatalogs(
+        client,
+        actor.organizationId,
+        input.teamId ?? null,
+        input.deliveryRoleId ?? null,
+      );
       const personId = randomUUID();
       await client.query(
         `INSERT INTO app.people
@@ -274,6 +294,7 @@ export class PlanningService {
         null,
         schedule,
       );
+      await this.replacePersonTags(client, actor.organizationId, personId, input.tagIds ?? []);
       await this.audit(client, actor, "person.created", "person", personId);
       return this.getPersonWithClient(client, actor.organizationId, personId);
     });
@@ -287,6 +308,12 @@ export class PlanningService {
     this.requireManage(actor);
     validateRange(input.activeFrom, input.activeUntil);
     return this.transaction(async (client) => {
+      await this.requireAssignableCatalogs(
+        client,
+        actor.organizationId,
+        input.teamId ?? null,
+        input.deliveryRoleId ?? null,
+      );
       const result = await client.query(
         `UPDATE app.people
          SET name = $1, email = $2, team_id = $3, delivery_role_id = $4,
@@ -316,6 +343,9 @@ export class PlanningService {
           "person_not_found",
         );
       await this.audit(client, actor, "person.updated", "person", personId);
+      if (input.tagIds !== undefined) {
+        await this.replacePersonTags(client, actor.organizationId, personId, input.tagIds);
+      }
       return result.rows[0];
     });
   }
@@ -857,10 +887,16 @@ export class PlanningService {
 
   private async getPersonWithClient(client: PoolClient, organizationId: string, personId: string) {
     const result = await client.query(
-      `SELECT id, name, email, team_id AS "teamId", delivery_role_id AS "deliveryRoleId",
+      `SELECT person.id, person.name, person.email, person.team_id AS "teamId",
+              person.delivery_role_id AS "deliveryRoleId",
               active_from::text AS "activeFrom", active_until::text AS "activeUntil",
-              row_version AS "rowVersion"
-       FROM app.people WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL`,
+              row_version AS "rowVersion",
+              COALESCE(array_agg(person_tag.tag_id::text) FILTER (WHERE person_tag.tag_id IS NOT NULL), '{}') AS "tagIds"
+       FROM app.people person
+       LEFT JOIN app.person_tags person_tag
+         ON person_tag.organization_id = person.organization_id AND person_tag.person_id = person.id
+       WHERE person.organization_id = $1 AND person.id = $2 AND person.archived_at IS NULL
+       GROUP BY person.organization_id, person.id`,
       [organizationId, personId],
     );
     return result.rows[0];
@@ -891,6 +927,56 @@ export class PlanningService {
     if (!project) throw new HttpError(404, "project_not_found");
     if (project.archived_at || ["completed", "cancelled"].includes(project.status)) {
       throw new HttpError(409, "project_not_allocatable");
+    }
+  }
+
+  private async requireAssignableCatalogs(
+    client: PoolClient,
+    organizationId: string,
+    teamId: string | null,
+    roleId: string | null,
+  ): Promise<void> {
+    if (teamId) {
+      const team = await client.query(
+        `SELECT 1 FROM app.teams WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL`,
+        [organizationId, teamId],
+      );
+      if (!team.rowCount) throw new HttpError(404, "team_not_found");
+    }
+    if (roleId) {
+      const role = await client.query(
+        `SELECT 1 FROM app.delivery_roles
+         WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL`,
+        [organizationId, roleId],
+      );
+      if (!role.rowCount) throw new HttpError(404, "delivery_role_not_found");
+    }
+  }
+
+  private async replacePersonTags(
+    client: PoolClient,
+    organizationId: string,
+    personId: string,
+    tagIds: readonly string[],
+  ): Promise<void> {
+    if (tagIds.length > 0) {
+      const active = await client.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM app.tags
+         WHERE organization_id = $1 AND id = ANY($2::uuid[]) AND archived_at IS NULL`,
+        [organizationId, tagIds],
+      );
+      if (Number(active.rows[0]?.count) !== tagIds.length)
+        throw new HttpError(404, "tag_not_found");
+    }
+    await client.query(
+      `DELETE FROM app.person_tags WHERE organization_id = $1 AND person_id = $2`,
+      [organizationId, personId],
+    );
+    for (const tagId of tagIds) {
+      await client.query(
+        `INSERT INTO app.person_tags (organization_id, person_id, tag_id) VALUES ($1, $2, $3)`,
+        [organizationId, personId, tagId],
+      );
     }
   }
 

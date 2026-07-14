@@ -115,6 +115,8 @@ describe("capacity invariants", () => {
       capacityMinutes: 0,
       confirmedMinutes: 0,
       tentativeMinutes: 0,
+      tentativeBillableMinutes: 0,
+      tentativeInternalMinutes: 0,
       billableConfirmedMinutes: 0,
       internalConfirmedMinutes: 0,
       billableUtilizationPercent: null,

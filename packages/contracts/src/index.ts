@@ -90,6 +90,7 @@ export const CreatePersonBody = Type.Object(
     email: Type.Optional(Email),
     teamId: Type.Optional(UuidSchema),
     deliveryRoleId: Type.Optional(UuidSchema),
+    tagIds: Type.Optional(Type.Array(UuidSchema, { maxItems: 50, uniqueItems: true })),
     activeFrom: LocalDateSchema,
     activeUntil: Type.Optional(LocalDateSchema),
     schedule: Type.Array(WeekdayScheduleSchema, { minItems: 7, maxItems: 7 }),
@@ -102,6 +103,7 @@ export const UpdatePersonBody = Type.Object(
     email: Type.Optional(Type.Union([Email, Type.Null()])),
     teamId: Type.Optional(Type.Union([UuidSchema, Type.Null()])),
     deliveryRoleId: Type.Optional(Type.Union([UuidSchema, Type.Null()])),
+    tagIds: Type.Optional(Type.Array(UuidSchema, { maxItems: 50, uniqueItems: true })),
     activeFrom: LocalDateSchema,
     activeUntil: Type.Optional(Type.Union([LocalDateSchema, Type.Null()])),
     rowVersion: RowVersionSchema,
@@ -195,5 +197,95 @@ export const VersionBody = Type.Object(
 );
 export const DateRangeQuery = Type.Object(
   { start: LocalDateSchema, end: LocalDateSchema, scenario: ScenarioSchema },
+  { additionalProperties: false },
+);
+
+export const NameBody = Type.Object(
+  { name: Type.String({ minLength: 1, maxLength: 120 }) },
+  { additionalProperties: false },
+);
+export const UpdateNameBody = Type.Object(
+  { name: Type.String({ minLength: 1, maxLength: 120 }), rowVersion: RowVersionSchema },
+  { additionalProperties: false },
+);
+export const HolidayDateBody = Type.Object(
+  { date: LocalDateSchema, name: Type.String({ minLength: 1, maxLength: 120 }) },
+  { additionalProperties: false },
+);
+export const HolidayAssignmentBody = Type.Object(
+  { calendarId: UuidSchema },
+  { additionalProperties: false },
+);
+export const LeaveEntryBody = Type.Object(
+  {
+    personId: UuidSchema,
+    leaveTypeId: UuidSchema,
+    startDate: LocalDateSchema,
+    endDate: LocalDateSchema,
+    minutesPerDay: Type.Optional(
+      Type.Union([Type.Integer({ minimum: 1, maximum: 1440 }), Type.Null()]),
+    ),
+  },
+  { additionalProperties: false },
+);
+export const UpdateLeaveEntryBody = Type.Object(
+  {
+    personId: UuidSchema,
+    leaveTypeId: UuidSchema,
+    startDate: LocalDateSchema,
+    endDate: LocalDateSchema,
+    minutesPerDay: Type.Optional(
+      Type.Union([Type.Integer({ minimum: 1, maximum: 1440 }), Type.Null()]),
+    ),
+    rowVersion: RowVersionSchema,
+  },
+  { additionalProperties: false },
+);
+export const LeaveRangeQuery = Type.Object(
+  {
+    start: LocalDateSchema,
+    end: LocalDateSchema,
+    personId: Type.Optional(UuidSchema),
+  },
+  { additionalProperties: false },
+);
+export const ConflictQuery = Type.Object(
+  {
+    start: LocalDateSchema,
+    end: LocalDateSchema,
+    scenario: ScenarioSchema,
+    personId: Type.Optional(UuidSchema),
+    teamId: Type.Optional(UuidSchema),
+    roleId: Type.Optional(UuidSchema),
+  },
+  { additionalProperties: false },
+);
+export const ConflictFingerprintParams = Type.Object(
+  { fingerprint: Type.String({ minLength: 8, maxLength: 128 }) },
+  { additionalProperties: false },
+);
+export const EarliestStartBody = Type.Object(
+  {
+    notBefore: LocalDateSchema,
+    workdayCount: Type.Integer({ minimum: 1, maximum: 60 }),
+    dailyMinutes: Type.Integer({ minimum: 1, maximum: 1440 }),
+    scenario: ScenarioSchema,
+    horizonDays: Type.Integer({ minimum: 1, maximum: 365 }),
+    roleId: Type.Optional(UuidSchema),
+    teamId: Type.Optional(UuidSchema),
+    tags: Type.Optional(Type.Array(UuidSchema, { maxItems: 20, uniqueItems: true })),
+  },
+  { additionalProperties: false },
+);
+export const ForecastQuery = Type.Object(
+  {
+    start: Type.Optional(LocalDateSchema),
+    weeks: Type.Optional(Type.Integer({ minimum: 1, maximum: 52 })),
+    personId: Type.Optional(UuidSchema),
+    teamId: Type.Optional(UuidSchema),
+    roleId: Type.Optional(UuidSchema),
+    projectId: Type.Optional(UuidSchema),
+    tagId: Type.Optional(UuidSchema),
+  },
   { additionalProperties: false },
 );

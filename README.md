@@ -10,10 +10,10 @@ accounting suite.
 ## Project Status
 
 Pre-alpha foundation with invitation-only OTP authentication, opaque sessions, protected admin APIs,
-the first responsive web shell, deterministic capacity math, planning schema, and core people,
-project, allocation, and schedule APIs. Catalog, leave, holiday, conflict acknowledgement,
-earliest-start HTTP, forecast HTTP, and planner UI integration remain deferred. Do not use it for
-production planning.
+the first responsive web shell, deterministic capacity math, planning schema, and V1 backend APIs for
+catalogs, clients, people, schedules, holidays, leave, projects, allocations, conflicts,
+earliest-start search, and advisory forecasts. Planner UI integration and CSV import/export remain
+deferred. Do not use it for production planning.
 
 Current screens:
 

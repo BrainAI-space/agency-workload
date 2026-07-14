@@ -478,4 +478,51 @@ ALTER TABLE {{schema}}.projects DROP CONSTRAINT projects_status_check;
 ALTER TABLE {{schema}}.projects ADD CONSTRAINT projects_status_check
   CHECK (status IN ('draft', 'tentative', 'confirmed', 'completed'));`,
   },
+  {
+    id: "0006_catalog_versions_and_single_holiday_calendar",
+    up: `
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT organization_id, person_id FROM {{schema}}.person_holiday_calendars
+    GROUP BY organization_id, person_id HAVING count(*) > 1
+  ) THEN
+    RAISE EXCEPTION 'holiday calendar assignment conflict: person has multiple calendars';
+  END IF;
+END;
+$$;
+
+ALTER TABLE {{schema}}.teams ADD COLUMN row_version integer NOT NULL DEFAULT 1 CHECK (row_version > 0);
+ALTER TABLE {{schema}}.delivery_roles ADD COLUMN row_version integer NOT NULL DEFAULT 1 CHECK (row_version > 0);
+ALTER TABLE {{schema}}.tags ADD COLUMN row_version integer NOT NULL DEFAULT 1 CHECK (row_version > 0);
+ALTER TABLE {{schema}}.holiday_calendars ADD COLUMN row_version integer NOT NULL DEFAULT 1 CHECK (row_version > 0);
+ALTER TABLE {{schema}}.leave_types ADD COLUMN row_version integer NOT NULL DEFAULT 1 CHECK (row_version > 0);
+CREATE UNIQUE INDEX person_one_holiday_calendar_idx
+  ON {{schema}}.person_holiday_calendars(organization_id, person_id);`,
+    down: `
+DROP INDEX IF EXISTS {{schema}}.person_one_holiday_calendar_idx;
+ALTER TABLE {{schema}}.leave_types DROP COLUMN row_version;
+ALTER TABLE {{schema}}.holiday_calendars DROP COLUMN row_version;
+ALTER TABLE {{schema}}.tags DROP COLUMN row_version;
+ALTER TABLE {{schema}}.delivery_roles DROP COLUMN row_version;
+ALTER TABLE {{schema}}.teams DROP COLUMN row_version;`,
+  },
+  {
+    id: "0007_holiday_calendar_active_name_uniqueness",
+    up: `
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT organization_id, lower(name) FROM {{schema}}.holiday_calendars
+    WHERE archived_at IS NULL
+    GROUP BY organization_id, lower(name) HAVING count(*) > 1
+  ) THEN
+    RAISE EXCEPTION 'holiday calendar active-name conflict';
+  END IF;
+END;
+$$;
+CREATE UNIQUE INDEX holiday_calendars_active_name_idx
+  ON {{schema}}.holiday_calendars(organization_id, lower(name)) WHERE archived_at IS NULL;`,
+    down: `DROP INDEX IF EXISTS {{schema}}.holiday_calendars_active_name_idx;`,
+  },
 ];

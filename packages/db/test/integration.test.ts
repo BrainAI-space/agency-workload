@@ -53,7 +53,7 @@ describe.skipIf(!enabled)("migration integration", () => {
   it("migrates fresh state, preserves prior objects, and is idempotent", async () => {
     if (!pool) throw new Error("integration pool unavailable");
     await pool.query(`CREATE TABLE "${schema}".legacy_marker (id integer PRIMARY KEY)`);
-    expect(await migrateUp({ pool, schema })).toBe(5);
+    expect(await migrateUp({ pool, schema })).toBe(7);
     expect(await migrateUp({ pool, schema })).toBe(0);
     const result = await pool.query<{ users: string | null; legacy: string | null }>(
       `SELECT to_regclass($1) AS users, to_regclass($2) AS legacy`,
@@ -75,7 +75,7 @@ describe.skipIf(!enabled)("migration integration", () => {
     const broken = [
       ...migrations,
       {
-        id: "0006_broken_recovery_probe",
+        id: "0008_broken_recovery_probe",
         up: `CREATE TABLE {{schema}}.must_rollback (id integer); SELECT missing_function();`,
         down: `DROP TABLE IF EXISTS {{schema}}.must_rollback`,
       },
@@ -183,6 +183,12 @@ describe.skipIf(!enabled)("migration integration", () => {
       can_manage_people: true,
       backup_can_read_allocations: true,
     });
+    expect(await migrateDown({ pool, schema })).toBe(
+      "0007_holiday_calendar_active_name_uniqueness",
+    );
+    expect(await migrateDown({ pool, schema })).toBe(
+      "0006_catalog_versions_and_single_holiday_calendar",
+    );
     expect(await migrateDown({ pool, schema })).toBe("0005_project_states_dates_and_timezones");
     expect(await migrateDown({ pool, schema })).toBe("0004_planning_domain_core");
     expect(await migrateDown({ pool, schema })).toBe(

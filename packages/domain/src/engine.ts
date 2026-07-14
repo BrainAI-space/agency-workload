@@ -6,6 +6,7 @@ import type {
   DailyCapacity,
   EarliestStartRequest,
   EarliestStartResult,
+  ForecastWeek,
   PersonPlan,
   Scenario,
   WorkScheduleVersion,
@@ -86,6 +87,8 @@ export function calculateDay(
   );
   let confirmedMinutes = 0;
   let tentativeMinutes = 0;
+  let tentativeBillableMinutes = 0;
+  let tentativeInternalMinutes = 0;
   let billableConfirmedMinutes = 0;
   let internalConfirmedMinutes = 0;
   for (const allocation of activeAllocations) {
@@ -96,6 +99,8 @@ export function calculateDay(
       else internalConfirmedMinutes += minutes;
     } else {
       tentativeMinutes += minutes;
+      if (allocation.kind === "billable") tentativeBillableMinutes += minutes;
+      else tentativeInternalMinutes += minutes;
     }
   }
   const scenarioMinutes =
@@ -108,6 +113,8 @@ export function calculateDay(
     capacityMinutes,
     confirmedMinutes,
     tentativeMinutes,
+    tentativeBillableMinutes,
+    tentativeInternalMinutes,
     billableConfirmedMinutes,
     internalConfirmedMinutes,
     availableConfirmedMinutes: Math.max(0, capacityMinutes - confirmedMinutes),
@@ -136,6 +143,8 @@ export function aggregateCapacity(days: readonly DailyCapacity[]): CapacityAggre
       capacityMinutes: sum.capacityMinutes + day.capacityMinutes,
       confirmedMinutes: sum.confirmedMinutes + day.confirmedMinutes,
       tentativeMinutes: sum.tentativeMinutes + day.tentativeMinutes,
+      tentativeBillableMinutes: sum.tentativeBillableMinutes + day.tentativeBillableMinutes,
+      tentativeInternalMinutes: sum.tentativeInternalMinutes + day.tentativeInternalMinutes,
       billableConfirmedMinutes: sum.billableConfirmedMinutes + day.billableConfirmedMinutes,
       internalConfirmedMinutes: sum.internalConfirmedMinutes + day.internalConfirmedMinutes,
     }),
@@ -143,6 +152,8 @@ export function aggregateCapacity(days: readonly DailyCapacity[]): CapacityAggre
       capacityMinutes: 0,
       confirmedMinutes: 0,
       tentativeMinutes: 0,
+      tentativeBillableMinutes: 0,
+      tentativeInternalMinutes: 0,
       billableConfirmedMinutes: 0,
       internalConfirmedMinutes: 0,
     },
@@ -157,6 +168,59 @@ export function aggregateCapacity(days: readonly DailyCapacity[]): CapacityAggre
       totals.capacityMinutes === 0
         ? null
         : roundHalfUp(totals.internalConfirmedMinutes * 100, totals.capacityMinutes),
+  };
+}
+
+export function calculateForecastWeek(
+  weekStart: DateOrdinal,
+  days: readonly DailyCapacity[],
+  billableTargetPercent: number,
+): ForecastWeek {
+  if (
+    !Number.isInteger(billableTargetPercent) ||
+    billableTargetPercent < 0 ||
+    billableTargetPercent > 100
+  ) {
+    throw new Error("Billable target percent must be an integer from 0 to 100");
+  }
+  const total = days.reduce(
+    (sum, day) => ({
+      capacity: sum.capacity + day.capacityMinutes,
+      confirmedBillable: sum.confirmedBillable + day.billableConfirmedMinutes,
+      confirmedInternal: sum.confirmedInternal + day.internalConfirmedMinutes,
+      tentativeBillable: sum.tentativeBillable + day.tentativeBillableMinutes,
+      tentativeInternal: sum.tentativeInternal + day.tentativeInternalMinutes,
+      confirmedOverbook: sum.confirmedOverbook + day.confirmedOverbookMinutes,
+      potentialOverbook: sum.potentialOverbook + day.potentialOverbookMinutes,
+    }),
+    {
+      capacity: 0,
+      confirmedBillable: 0,
+      confirmedInternal: 0,
+      tentativeBillable: 0,
+      tentativeInternal: 0,
+      confirmedOverbook: 0,
+      potentialOverbook: 0,
+    },
+  );
+  const confirmed = total.confirmedBillable + total.confirmedInternal;
+  const potential = confirmed + total.tentativeBillable + total.tentativeInternal;
+  const targetMinutes =
+    total.capacity === 0 ? 0 : roundHalfUp(total.capacity * billableTargetPercent, 100);
+  return {
+    weekStart,
+    capacityMinutes: total.capacity,
+    confirmedBillableMinutes: total.confirmedBillable,
+    confirmedInternalMinutes: total.confirmedInternal,
+    tentativeBillableMinutes: total.tentativeBillable,
+    tentativeInternalMinutes: total.tentativeInternal,
+    confirmedUtilizationPercent:
+      total.capacity === 0 ? null : roundHalfUp(confirmed * 100, total.capacity),
+    potentialUtilizationPercent:
+      total.capacity === 0 ? null : roundHalfUp(potential * 100, total.capacity),
+    confirmedOverbookMinutes: total.confirmedOverbook,
+    potentialOverbookMinutes: total.potentialOverbook,
+    billableTargetGapMinutes: Math.max(0, targetMinutes - total.confirmedBillable),
   };
 }
 

@@ -50,6 +50,8 @@ export interface DailyCapacity {
   capacityMinutes: number;
   confirmedMinutes: number;
   tentativeMinutes: number;
+  tentativeBillableMinutes: number;
+  tentativeInternalMinutes: number;
   billableConfirmedMinutes: number;
   internalConfirmedMinutes: number;
   availableConfirmedMinutes: number;
@@ -64,6 +66,8 @@ export interface CapacityAggregate {
   capacityMinutes: number;
   confirmedMinutes: number;
   tentativeMinutes: number;
+  tentativeBillableMinutes: number;
+  tentativeInternalMinutes: number;
   billableConfirmedMinutes: number;
   internalConfirmedMinutes: number;
   billableUtilizationPercent: number | null;
@@ -93,4 +97,18 @@ export interface EarliestStartResult {
   personId: string;
   start: DateOrdinal;
   end: DateOrdinal;
+}
+
+export interface ForecastWeek {
+  weekStart: DateOrdinal;
+  capacityMinutes: number;
+  confirmedBillableMinutes: number;
+  confirmedInternalMinutes: number;
+  tentativeBillableMinutes: number;
+  tentativeInternalMinutes: number;
+  confirmedUtilizationPercent: number | null;
+  potentialUtilizationPercent: number | null;
+  confirmedOverbookMinutes: number;
+  potentialOverbookMinutes: number;
+  billableTargetGapMinutes: number;
 }

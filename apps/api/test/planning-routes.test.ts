@@ -31,6 +31,7 @@ function services(role: AppRole): ApplicationServices {
         email: ["owner", "admin", "planner"].includes(role) ? "work@example.com" : undefined,
         teamId: null,
         deliveryRoleId: null,
+        tagIds: [],
         activeFrom: "2030-01-07",
         activeUntil: null,
         rowVersion: 1,
@@ -46,6 +47,7 @@ function services(role: AppRole): ApplicationServices {
         email: "work@example.com",
         teamId: null,
         deliveryRoleId: null,
+        tagIds: [],
         activeFrom: "2030-01-07",
         activeUntil: null,
         rowVersion: 1,
@@ -135,6 +137,9 @@ function services(role: AppRole): ApplicationServices {
     },
     admin: {} as ApplicationServices["admin"],
     planning,
+    catalog: {} as ApplicationServices["catalog"],
+    calendar: {} as ApplicationServices["calendar"],
+    derived: {} as ApplicationServices["derived"],
     close: vi.fn(async () => undefined),
   };
 }

@@ -33,6 +33,7 @@
     "test:browser:smoke": "node tools/run-browser-smoke.mjs",
     "test:admin:integration": "node --env-file=.env tools/run-admin-integration.mjs",
     "test:planning:integration": "node --env-file=.env tools/run-planning-integration.mjs",
+    "test:extended:integration": "node --env-file=.env tools/run-extended-integration.mjs",
     "test:coverage": "npm run test:coverage --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "public:sync": "node tools/sync-public.mjs",

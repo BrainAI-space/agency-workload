@@ -176,6 +176,22 @@ describe("22 supplied-rule golden calculation cases", () => {
     );
     expect(day).toMatchObject({ billableUtilizationPercent: 50, internalUtilizationPercent: 25 });
   });
+  it("16b tracks tentative billable and internal demand separately", () => {
+    const day = calculateDay(
+      person({
+        allocations: [
+          allocation({ id: "tb", state: "tentative", kind: "billable", minutesPerDay: 90 }),
+          allocation({ id: "ti", state: "tentative", kind: "internal", minutesPerDay: 60 }),
+        ],
+      }),
+      monday,
+    );
+    expect(day).toMatchObject({
+      tentativeMinutes: 150,
+      tentativeBillableMinutes: 90,
+      tentativeInternalMinutes: 60,
+    });
+  });
   it("17 reports zero-capacity utilization as N/A", () => {
     expect(calculateDay(person(), addDays(monday, 5)).billableUtilizationPercent).toBeNull();
   });
