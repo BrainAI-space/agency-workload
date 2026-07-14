@@ -1,22 +1,17 @@
+import "@fontsource-variable/manrope/wght.css";
+import "@fontsource/ibm-plex-mono/latin-400.css";
+import "@fontsource/ibm-plex-mono/latin-500.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { RouterProvider } from "react-router-dom";
+import { appRouter } from "./app";
 import "./styles.css";
 
-function FoundationScreen() {
-  return (
-    <main>
-      <h1>Agency Workload</h1>
-      <p>Secure foundation in progress.</p>
-    </main>
-  );
-}
-
 const root = document.getElementById("root");
-
 if (!root) throw new Error("Application root is missing");
 
 createRoot(root).render(
   <StrictMode>
-    <FoundationScreen />
+    <RouterProvider router={appRouter} />
   </StrictMode>,
 );

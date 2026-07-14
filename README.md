@@ -9,8 +9,19 @@ accounting suite.
 
 ## Project Status
 
-Pre-alpha foundation. The repository is public so architecture, security, and product decisions can
-be reviewed as they are implemented. Do not use it for production planning yet.
+Pre-alpha foundation with invitation-only OTP authentication, opaque sessions, protected admin APIs,
+and the first responsive web shell. Capacity, allocations, project planning, forecasts, people, and
+leave workflows are not implemented yet. Do not use it for production planning.
+
+Current screens:
+
+- Email OTP login and verification
+- Protected editorial planner shell with an explicit empty schedule
+- Mobile weekly brief structure
+- Functional member, invitation, resend, role, deactivation, and audit administration
+- Honest forecast, project, people, and leave milestone placeholders
+
+See [`docs/web-shell.md`](docs/web-shell.md) for route and screen status.
 
 ## Workspaces
 
@@ -38,6 +49,7 @@ Install and verify the current foundation:
 ```bash
 npm ci
 npm run verify
+npm run test:browser:smoke
 ```
 
 Local database, GoTrue, and Mailpit setup is documented in

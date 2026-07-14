@@ -13,6 +13,8 @@
   },
   "dependencies": {
     "@agency-workload/contracts": "*",
+    "@fontsource-variable/manrope": "5.2.8",
+    "@fontsource/ibm-plex-mono": "5.2.7",
     "date-fns": "4.4.0",
     "lucide-react": "1.24.0",
     "react": "19.2.7",
