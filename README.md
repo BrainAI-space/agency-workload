@@ -10,8 +10,10 @@ accounting suite.
 ## Project Status
 
 Pre-alpha foundation with invitation-only OTP authentication, opaque sessions, protected admin APIs,
-and the first responsive web shell. Capacity, allocations, project planning, forecasts, people, and
-leave workflows are not implemented yet. Do not use it for production planning.
+the first responsive web shell, deterministic capacity math, planning schema, and core people,
+project, allocation, and schedule APIs. Catalog, leave, holiday, conflict acknowledgement,
+earliest-start HTTP, forecast HTTP, and planner UI integration remain deferred. Do not use it for
+production planning.
 
 Current screens:
 
@@ -22,6 +24,8 @@ Current screens:
 - Honest forecast, project, people, and leave milestone placeholders
 
 See [`docs/web-shell.md`](docs/web-shell.md) for route and screen status.
+See [`docs/planning-domain.md`](docs/planning-domain.md) for formulas, schema, APIs, tested scale, and
+the exact deferred boundary.
 
 ## Workspaces
 

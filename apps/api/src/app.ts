@@ -19,6 +19,7 @@ import Fastify, { type FastifyRequest, type FastifyServerOptions, LogController 
 import type { SessionContext } from "./auth-service.js";
 import type { AppConfig } from "./config.js";
 import { HttpError } from "./errors.js";
+import { registerPlanningRoutes } from "./planning-routes.js";
 import type { ApplicationServices } from "./services.js";
 
 export interface BuildAppOptions {
@@ -330,6 +331,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       { schema: { response: { 200: AuditListResponse } } },
       async (request) => services.admin.readAudit(await sessionFor(request)),
     );
+    registerPlanningRoutes(app, { planning: services.planning, sessionFor, csrfFor });
   }
 
   return app;

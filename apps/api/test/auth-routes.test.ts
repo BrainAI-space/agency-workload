@@ -48,6 +48,7 @@ function services(role: AppRole = "owner"): ApplicationServices {
       revokeSession: vi.fn(async () => undefined),
       readAudit: vi.fn(async () => []),
     },
+    planning: {} as ApplicationServices["planning"],
     close: vi.fn(async () => undefined),
   };
 }

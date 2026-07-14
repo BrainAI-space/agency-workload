@@ -54,3 +54,146 @@ export const EmptyResponse = Type.Object(
   { ok: Type.Literal(true) },
   { additionalProperties: false },
 );
+
+export const LocalDateSchema = Type.String({ pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" });
+export const RowVersionSchema = Type.Integer({ minimum: 1 });
+export const UuidSchema = Type.String({ format: "uuid" });
+export const ScenarioSchema = Type.Union([
+  Type.Literal("confirmed"),
+  Type.Literal("confirmed_and_tentative"),
+]);
+export const PlanningSettingsBody = Type.Object(
+  {
+    timezone: Type.String({ minLength: 1, maxLength: 100 }),
+    weekStartsOn: Type.Integer({ minimum: 1, maximum: 7 }),
+    dateFormat: Type.Union([
+      Type.Literal("DD MMM YYYY"),
+      Type.Literal("MMM D, YYYY"),
+      Type.Literal("YYYY-MM-DD"),
+    ]),
+    forecastHorizonWeeks: Type.Integer({ minimum: 1, maximum: 104 }),
+    billableTargetPercent: Type.Integer({ minimum: 0, maximum: 100 }),
+    rowVersion: RowVersionSchema,
+  },
+  { additionalProperties: false },
+);
+export const WeekdayScheduleSchema = Type.Object(
+  {
+    isoWeekday: Type.Integer({ minimum: 1, maximum: 7 }),
+    minutes: Type.Integer({ minimum: 0, maximum: 1440 }),
+  },
+  { additionalProperties: false },
+);
+export const CreatePersonBody = Type.Object(
+  {
+    name: Type.String({ minLength: 1, maxLength: 120 }),
+    email: Type.Optional(Email),
+    teamId: Type.Optional(UuidSchema),
+    deliveryRoleId: Type.Optional(UuidSchema),
+    activeFrom: LocalDateSchema,
+    activeUntil: Type.Optional(LocalDateSchema),
+    schedule: Type.Array(WeekdayScheduleSchema, { minItems: 7, maxItems: 7 }),
+  },
+  { additionalProperties: false },
+);
+export const UpdatePersonBody = Type.Object(
+  {
+    name: Type.String({ minLength: 1, maxLength: 120 }),
+    email: Type.Optional(Type.Union([Email, Type.Null()])),
+    teamId: Type.Optional(Type.Union([UuidSchema, Type.Null()])),
+    deliveryRoleId: Type.Optional(Type.Union([UuidSchema, Type.Null()])),
+    activeFrom: LocalDateSchema,
+    activeUntil: Type.Optional(Type.Union([LocalDateSchema, Type.Null()])),
+    rowVersion: RowVersionSchema,
+  },
+  { additionalProperties: false },
+);
+export const WorkScheduleBody = Type.Object(
+  {
+    effectiveFrom: LocalDateSchema,
+    effectiveUntil: Type.Optional(LocalDateSchema),
+    weekdays: Type.Array(WeekdayScheduleSchema, { minItems: 7, maxItems: 7 }),
+  },
+  { additionalProperties: false },
+);
+export const ProjectKindSchema = Type.Union([Type.Literal("billable"), Type.Literal("internal")]);
+export const ProjectStatusSchema = Type.Union([
+  Type.Literal("draft"),
+  Type.Literal("tentative"),
+  Type.Literal("confirmed"),
+  Type.Literal("completed"),
+]);
+export const CreateProjectBody = Type.Object(
+  {
+    name: Type.String({ minLength: 1, maxLength: 160 }),
+    kind: ProjectKindSchema,
+    status: Type.Union([
+      Type.Literal("draft"),
+      Type.Literal("tentative"),
+      Type.Literal("confirmed"),
+    ]),
+    clientId: Type.Optional(UuidSchema),
+    targetStart: Type.Optional(LocalDateSchema),
+    targetEnd: Type.Optional(LocalDateSchema),
+  },
+  { additionalProperties: false },
+);
+export const UpdateProjectBody = Type.Object(
+  {
+    name: Type.String({ minLength: 1, maxLength: 160 }),
+    kind: ProjectKindSchema,
+    status: Type.Union([
+      Type.Literal("draft"),
+      Type.Literal("tentative"),
+      Type.Literal("confirmed"),
+    ]),
+    clientId: Type.Optional(UuidSchema),
+    targetStart: Type.Optional(LocalDateSchema),
+    targetEnd: Type.Optional(LocalDateSchema),
+    rowVersion: RowVersionSchema,
+  },
+  { additionalProperties: false },
+);
+export const AllocationModeSchema = Type.Union([
+  Type.Literal("minutes_per_day"),
+  Type.Literal("capacity_percent"),
+]);
+export const AllocationStateSchema = Type.Union([
+  Type.Literal("confirmed"),
+  Type.Literal("tentative"),
+]);
+export const CreateAllocationBody = Type.Object(
+  {
+    personId: UuidSchema,
+    projectId: UuidSchema,
+    startDate: LocalDateSchema,
+    endDate: LocalDateSchema,
+    mode: AllocationModeSchema,
+    minutesPerDay: Type.Optional(Type.Integer({ minimum: 1, maximum: 1440 })),
+    capacityPercent: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
+    state: AllocationStateSchema,
+  },
+  { additionalProperties: false },
+);
+export const UpdateAllocationBody = Type.Object(
+  {
+    personId: UuidSchema,
+    projectId: UuidSchema,
+    startDate: LocalDateSchema,
+    endDate: LocalDateSchema,
+    mode: AllocationModeSchema,
+    minutesPerDay: Type.Optional(Type.Integer({ minimum: 1, maximum: 1440 })),
+    capacityPercent: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
+    state: AllocationStateSchema,
+    rowVersion: RowVersionSchema,
+  },
+  { additionalProperties: false },
+);
+export const VersionBody = Type.Object(
+  { rowVersion: RowVersionSchema },
+  { additionalProperties: false },
+);
+export const DateRangeQuery = Type.Object(
+  { start: LocalDateSchema, end: LocalDateSchema, scenario: ScenarioSchema },
+  { additionalProperties: false },
+);

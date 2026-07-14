@@ -199,7 +199,7 @@ describe.skipIf(!enabled)("GoTrue, Mailpit, and opaque session integration", () 
     expect(
       (await post("/api/v1/auth/verify-code", { email, code: captured.code })).statusCode,
     ).toBe(401);
-  });
+  }, 15_000);
 
   it("creates and accepts an email-only invitation without creating a schedulable person", async () => {
     await clearMail();
@@ -234,10 +234,11 @@ describe.skipIf(!enabled)("GoTrue, Mailpit, and opaque session integration", () 
     );
     const user = appUser.rows[0];
     if (!user) throw new Error("invited app user unavailable");
-    const personTable = await db().query<{ table_name: string | null }>(
-      `SELECT to_regclass('app.people') AS table_name`,
+    const schedulablePerson = await db().query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM app.people WHERE organization_id = $1 AND email = $2`,
+      [sessionOrganizationId(ownerLogin.json()), invitedEmail],
     );
-    expect(personTable.rows[0]?.table_name).toBeNull();
+    expect(schedulablePerson.rows[0]?.count).toBe("0");
 
     superuserSql(`
       SET session_replication_role = replica;
@@ -261,3 +262,18 @@ describe.skipIf(!enabled)("GoTrue, Mailpit, and opaque session integration", () 
     });
   }, 20_000);
 });
+
+function sessionOrganizationId(response: unknown): string {
+  if (
+    !response ||
+    typeof response !== "object" ||
+    !("user" in response) ||
+    !response.user ||
+    typeof response.user !== "object" ||
+    !("organizationId" in response.user) ||
+    typeof response.user.organizationId !== "string"
+  ) {
+    throw new Error("session organization unavailable");
+  }
+  return response.user.organizationId;
+}

@@ -9,6 +9,7 @@ const expected = [
   ["apps/web", "@agency-workload/web"],
   ["packages/contracts", "@agency-workload/contracts"],
   ["packages/db", "@agency-workload/db"],
+  ["packages/domain", "@agency-workload/domain"],
 ];
 
 const failures = [];

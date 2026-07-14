@@ -4,6 +4,7 @@ import { AuthService } from "./auth-service.js";
 import type { AppConfig } from "./config.js";
 import { GoTrueClient } from "./gotrue-client.js";
 import { FixedSmtpMailer } from "./mailer.js";
+import { PlanningService } from "./planning-service.js";
 
 export interface ApplicationServices {
   auth: Pick<
@@ -21,6 +22,7 @@ export interface ApplicationServices {
     | "resendInvitation"
     | "revokeSession"
   >;
+  planning: PlanningService;
   close(): Promise<void>;
 }
 
@@ -33,5 +35,6 @@ export function createApplicationServices(config: AppConfig): ApplicationService
   const mailer = new FixedSmtpMailer(config.smtp);
   const auth = new AuthService(pool, config, gotrue, mailer);
   const admin = new AdminService(pool, auth);
-  return { auth, admin, close: () => pool.end() };
+  const planning = new PlanningService(pool);
+  return { auth, admin, planning, close: () => pool.end() };
 }

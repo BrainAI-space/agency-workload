@@ -53,7 +53,7 @@ describe.skipIf(!enabled)("migration integration", () => {
   it("migrates fresh state, preserves prior objects, and is idempotent", async () => {
     if (!pool) throw new Error("integration pool unavailable");
     await pool.query(`CREATE TABLE "${schema}".legacy_marker (id integer PRIMARY KEY)`);
-    expect(await migrateUp({ pool, schema })).toBe(3);
+    expect(await migrateUp({ pool, schema })).toBe(5);
     expect(await migrateUp({ pool, schema })).toBe(0);
     const result = await pool.query<{ users: string | null; legacy: string | null }>(
       `SELECT to_regclass($1) AS users, to_regclass($2) AS legacy`,
@@ -75,7 +75,7 @@ describe.skipIf(!enabled)("migration integration", () => {
     const broken = [
       ...migrations,
       {
-        id: "0004_broken_recovery_probe",
+        id: "0006_broken_recovery_probe",
         up: `CREATE TABLE {{schema}}.must_rollback (id integer); SELECT missing_function();`,
         down: `DROP TABLE IF EXISTS {{schema}}.must_rollback`,
       },
@@ -135,20 +135,56 @@ describe.skipIf(!enabled)("migration integration", () => {
     expect(invitations.filter((result) => result.status === "fulfilled")).toHaveLength(1);
   });
 
+  it("enforces project target-start and timezone shape constraints", async () => {
+    if (!pool) throw new Error("integration pool unavailable");
+    const organizationId = randomUUID();
+    await pool.query(
+      `INSERT INTO "${schema}".organizations (id, slug, name) VALUES ($1, $2, 'Constraints')`,
+      [organizationId, `constraints-${randomBytes(4).toString("hex")}`],
+    );
+    await expect(
+      pool.query(
+        `INSERT INTO "${schema}".projects
+         (organization_id, id, name, kind, status, target_end)
+         VALUES ($1, $2, 'Invalid dates', 'billable', 'draft', '2030-01-31')`,
+        [organizationId, randomUUID()],
+      ),
+    ).rejects.toMatchObject({ code: "23514" });
+    await expect(
+      pool.query(
+        `INSERT INTO "${schema}".organization_planning_settings (organization_id, timezone)
+         VALUES ($1, '../../UTC')`,
+        [organizationId],
+      ),
+    ).rejects.toMatchObject({ code: "23514" });
+  });
+
   it("enforces runtime audit grants and supports explicit rollback", async () => {
     if (!pool) throw new Error("integration pool unavailable");
     const grants = await pool.query<{
       can_insert: boolean;
       can_update: boolean;
       can_delete: boolean;
+      can_manage_people: boolean;
+      backup_can_read_allocations: boolean;
     }>(
       `SELECT
          has_table_privilege('agency_workload_runtime', $1, 'INSERT') AS can_insert,
          has_table_privilege('agency_workload_runtime', $1, 'UPDATE') AS can_update,
-         has_table_privilege('agency_workload_runtime', $1, 'DELETE') AS can_delete`,
-      [`${schema}.audit_events`],
+         has_table_privilege('agency_workload_runtime', $1, 'DELETE') AS can_delete,
+         has_table_privilege('agency_workload_runtime', $2, 'SELECT,INSERT,UPDATE,DELETE') AS can_manage_people,
+         has_table_privilege('agency_workload_backup', $3, 'SELECT') AS backup_can_read_allocations`,
+      [`${schema}.audit_events`, `${schema}.people`, `${schema}.allocations`],
     );
-    expect(grants.rows[0]).toEqual({ can_insert: true, can_update: false, can_delete: false });
+    expect(grants.rows[0]).toEqual({
+      can_insert: true,
+      can_update: false,
+      can_delete: false,
+      can_manage_people: true,
+      backup_can_read_allocations: true,
+    });
+    expect(await migrateDown({ pool, schema })).toBe("0005_project_states_dates_and_timezones");
+    expect(await migrateDown({ pool, schema })).toBe("0004_planning_domain_core");
     expect(await migrateDown({ pool, schema })).toBe(
       "0003_single_organization_and_invitation_delivery",
     );
