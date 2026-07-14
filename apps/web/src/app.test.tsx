@@ -15,6 +15,20 @@ const mocks = vi.hoisted(() => ({
   resendInvitation: vi.fn(),
   changeMemberRole: vi.fn(),
   deactivateMember: vi.fn(),
+  listPeople: vi.fn(),
+  listProjects: vi.fn(),
+  listAllocations: vi.fn(),
+  getSchedule: vi.fn(),
+  getForecast: vi.fn(),
+  listTeams: vi.fn(),
+  listDeliveryRoles: vi.fn(),
+  listClients: vi.fn(),
+  createPerson: vi.fn(),
+  createProject: vi.fn(),
+  createAllocation: vi.fn(),
+  archivePerson: vi.fn(),
+  transitionProject: vi.fn(),
+  findEarliestStart: vi.fn(),
 }));
 
 vi.mock("./lib/api", () => ({ api: mocks }));
@@ -54,6 +68,32 @@ describe("Agency Workload app routes", () => {
       deliveryStatus: "sent",
     });
     mocks.resendInvitation.mockResolvedValue({ deliveryStatus: "sent" });
+    mocks.listPeople.mockResolvedValue([]);
+    mocks.listProjects.mockResolvedValue([]);
+    mocks.listAllocations.mockResolvedValue([]);
+    mocks.getSchedule.mockResolvedValue({
+      start: "2030-01-07",
+      end: "2030-02-03",
+      scenario: "confirmed_and_tentative",
+      people: [],
+      conflicts: [],
+    });
+    mocks.getForecast.mockResolvedValue({
+      generatedAt: "2030-01-07T00:00:00.000Z",
+      timezone: "UTC",
+      weekStartsOn: 1,
+      assumptions: "Advisory forecast.",
+      weeks: [],
+    });
+    mocks.listTeams.mockResolvedValue([]);
+    mocks.listDeliveryRoles.mockResolvedValue([]);
+    mocks.listClients.mockResolvedValue([]);
+    mocks.createPerson.mockResolvedValue({});
+    mocks.createProject.mockResolvedValue({});
+    mocks.createAllocation.mockResolvedValue({});
+    mocks.archivePerson.mockResolvedValue({ ok: true });
+    mocks.transitionProject.mockResolvedValue({ ok: true });
+    mocks.findEarliestStart.mockResolvedValue([]);
   });
 
   it("redirects protected routes only after the session loading state resolves", async () => {
@@ -121,10 +161,8 @@ describe("Agency Workload app routes", () => {
     expect(await screen.findByRole("heading", { name: /schedule/i })).toBeVisible();
     expect(screen.getByRole("table", { name: /people by week/i })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: /weekly brief/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /find capacity/i })).toBeDisabled();
-    expect(
-      screen.getByText(/capacity search arrives with the planning domain milestone/i),
-    ).toBeVisible();
+    expect(screen.getByRole("button", { name: /find capacity/i })).toBeEnabled();
+    expect(await screen.findByText(/no people yet/i)).toBeVisible();
   });
 
   it("forbids ordinary roles from admin routes and provides an accessible not-found page", async () => {
@@ -179,5 +217,132 @@ describe("Agency Workload app routes", () => {
     expect(await screen.findByRole("heading", { name: /leave/i })).toBeVisible();
     await router.navigate("/more");
     expect(await screen.findByRole("link", { name: /administration/i })).toBeVisible();
+  });
+
+  it("renders real people, projects, and allocation slips on the schedule", async () => {
+    mocks.getSession.mockResolvedValue(ownerSession);
+    mocks.listPeople.mockResolvedValue([
+      {
+        id: "44444444-4444-4444-8444-444444444444",
+        name: "Jamie Rivera",
+        teamId: null,
+        deliveryRoleId: null,
+        activeFrom: "2026-01-01",
+        activeUntil: null,
+        rowVersion: 1,
+      },
+    ]);
+    mocks.listProjects.mockResolvedValue([
+      {
+        id: "55555555-5555-4555-8555-555555555555",
+        clientId: null,
+        name: "Client launch",
+        kind: "billable",
+        status: "confirmed",
+        targetStart: null,
+        targetEnd: null,
+        rowVersion: 1,
+        completedAt: null,
+      },
+    ]);
+    mocks.listAllocations.mockResolvedValue([
+      {
+        id: "66666666-6666-4666-8666-666666666666",
+        personId: "44444444-4444-4444-8444-444444444444",
+        projectId: "55555555-5555-4555-8555-555555555555",
+        startDate: "2020-01-01",
+        endDate: "2035-01-01",
+        mode: "minutes_per_day",
+        minutesPerDay: 240,
+        capacityPercent: null,
+        state: "confirmed",
+        rowVersion: 1,
+      },
+    ]);
+    mocks.getSchedule.mockResolvedValue({
+      start: "2026-01-01",
+      end: "2026-12-31",
+      scenario: "confirmed_and_tentative",
+      people: [{ personId: "44444444-4444-4444-8444-444444444444", days: [] }],
+      conflicts: [],
+    });
+
+    renderRoute("/schedule");
+
+    expect(await screen.findByText("Jamie Rivera")).toBeVisible();
+    expect(screen.getAllByRole("button", { name: /client launch/i }).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/no people yet/i)).not.toBeInTheDocument();
+  });
+
+  it("creates a person through the accessible planning form", async () => {
+    mocks.getSession.mockResolvedValue(ownerSession);
+    renderRoute("/people");
+
+    const name = await screen.findByLabelText(/^name$/i);
+    fireEvent.change(name, { target: { value: "Morgan Lee" } });
+    const form = name.closest("form");
+    if (!form) throw new Error("person form unavailable");
+    fireEvent.submit(form);
+
+    await waitFor(() =>
+      expect(mocks.createPerson).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "Morgan Lee", schedule: expect.any(Array) }),
+        "csrf-memory",
+      ),
+    );
+  });
+
+  it("shows an advisory forecast from the real response contract", async () => {
+    mocks.getSession.mockResolvedValue(ownerSession);
+    mocks.getForecast.mockResolvedValue({
+      generatedAt: "2030-01-07T00:00:00.000Z",
+      timezone: "Asia/Dhaka",
+      weekStartsOn: 1,
+      assumptions: "Advisory forecast from current schedules.",
+      weeks: [
+        {
+          weekStart: "2030-01-07",
+          capacityMinutes: 2400,
+          confirmedBillableMinutes: 900,
+          confirmedInternalMinutes: 300,
+          tentativeBillableMinutes: 240,
+          tentativeInternalMinutes: 120,
+          confirmedUtilizationPercent: 50,
+          potentialUtilizationPercent: 65,
+          confirmedOverbookMinutes: 0,
+          potentialOverbookMinutes: 0,
+          billableTargetGapMinutes: 900,
+        },
+      ],
+    });
+
+    renderRoute("/forecast");
+
+    expect(await screen.findByText(/confirmed work uses 50%/i)).toBeVisible();
+    expect(screen.getByText(/timezone: asia\/dhaka/i)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Table" }));
+    expect(screen.getByRole("table")).toBeVisible();
+  });
+
+  it("keeps Start Finder separate from allocation creation", async () => {
+    mocks.getSession.mockResolvedValue(ownerSession);
+    mocks.findEarliestStart.mockResolvedValue([
+      {
+        personId: "44444444-4444-4444-8444-444444444444",
+        start: "2030-01-07",
+        end: "2030-01-18",
+        minimumHeadroomMinutes: 120,
+        explanation: "Weekends extend the range.",
+      },
+    ]);
+    renderRoute("/schedule");
+    fireEvent.click(await screen.findByRole("button", { name: /find capacity/i }));
+    fireEvent.click(screen.getByRole("button", { name: /search availability/i }));
+
+    expect(await screen.findByText(/weekends extend the range/i)).toBeVisible();
+    expect(mocks.createAllocation).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /plan separately/i }));
+    expect(await screen.findByRole("heading", { name: /new allocation/i })).toBeVisible();
+    expect(mocks.createAllocation).not.toHaveBeenCalled();
   });
 });

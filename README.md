@@ -12,16 +12,20 @@ accounting suite.
 Pre-alpha foundation with invitation-only OTP authentication, opaque sessions, protected admin APIs,
 the first responsive web shell, deterministic capacity math, planning schema, and V1 backend APIs for
 catalogs, clients, people, schedules, holidays, leave, projects, allocations, conflicts,
-earliest-start search, and advisory forecasts. Planner UI integration and CSV import/export remain
-deferred. Do not use it for production planning.
+earliest-start search, and advisory forecasts. The web app now connects real people, projects,
+allocations, schedule, Start Finder, and forecast workflows. Leave UI, catalog administration, and
+CSV import/export remain deferred. Do not use it for production planning.
 
 Current screens:
 
 - Email OTP login and verification
-- Protected editorial planner shell with an explicit empty schedule
-- Mobile weekly brief structure
+- Real people-by-week schedule with confirmed/tentative allocation forms and conflict indicators
+- Functional People and Projects creation/archive workflows
+- Start Finder with explicit separate allocation flow
+- Real 13-week forecast with chart and semantic table views
+- Mobile weekly brief from live capacity data
 - Functional member, invitation, resend, role, deactivation, and audit administration
-- Honest forecast, project, people, and leave milestone placeholders
+- Honest Leave milestone placeholder
 
 See [`docs/web-shell.md`](docs/web-shell.md) for route and screen status.
 See [`docs/planning-domain.md`](docs/planning-domain.md) for formulas, schema, APIs, tested scale, and

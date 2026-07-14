@@ -1,9 +1,10 @@
 # Planning Domain Core
 
-**Status:** Verified V1 backend boundary. Planner UI integration is deferred.
+**Status:** Verified V1 backend boundary with core planner UI integration.
 
 This milestone establishes deterministic calendar math, the complete V1 planning schema, and the V1
-planning backend APIs. No planner UI is connected to these APIs yet.
+planning backend APIs. The web app consumes people, projects, allocations, schedule, earliest-start,
+and forecast APIs. Leave UI and catalog administration remain deferred.
 
 ## Calendar And Minutes
 
@@ -165,7 +166,8 @@ been validated.
 
 ## Remaining Deferrals
 
-- planner UI connection to these APIs
+- leave and holiday management UI
+- catalog and planning-settings administration UI
 - CSV import/export
 - leave balances, approvals, and sensitive reasons
 - automatic staffing or assignment

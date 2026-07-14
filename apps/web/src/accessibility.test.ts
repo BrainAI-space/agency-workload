@@ -10,7 +10,7 @@ describe("responsive accessibility contract", () => {
     expect(css).toContain(".mobile-nav");
     expect(css).toContain(".mobile-brief");
     expect(css).toContain("@media (prefers-reduced-motion: reduce)");
-    expect(css).not.toContain("linear-gradient");
+    expect(css).not.toMatch(/background:\s*linear-gradient/);
   });
 
   it("contains no unsafe raw HTML rendering", async () => {

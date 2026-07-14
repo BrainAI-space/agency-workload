@@ -9,10 +9,10 @@ not call GoTrue, PostgreSQL, Mailpit, or SMTP directly.
 |---|---|
 | `/login` | Functional invitation-only email request |
 | `/verify` | Functional six-digit OTP verification and resend cooldown |
-| `/schedule` | Protected responsive shell and honest empty planning board |
-| `/forecast` | Protected milestone placeholder; no forecast data yet |
-| `/projects` | Protected milestone placeholder; no project data yet |
-| `/people` | Protected milestone placeholder; no schedulable people data yet |
+| `/schedule` | Functional real-data planning board, allocation form, Start Finder, conflicts, and mobile brief |
+| `/forecast` | Functional 13-week advisory chart and semantic table |
+| `/projects` | Functional project/client list, create, complete, and archive workflows |
+| `/people` | Functional people list, create, team/role assignment, schedule defaults, and archive |
 | `/leave` | Protected milestone placeholder; no leave data yet |
 | `/more` | Protected mobile fallback for Leave, account/logout, and role-gated Admin access |
 | `/admin/members` | Functional member list, role change, and deactivation |

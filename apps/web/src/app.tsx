@@ -9,7 +9,14 @@ import {
 } from "./components/route-states";
 import { AdminSettingsPage, AuditPage, InvitationsPage, MembersPage } from "./pages/admin-pages";
 import { LoginPage, VerifyPage } from "./pages/auth-pages";
-import { MorePage, PlaceholderPage, SchedulePage } from "./pages/planner-pages";
+import {
+  ForecastPage,
+  MorePage,
+  PeoplePage,
+  PlaceholderPage,
+  ProjectsPage,
+  SchedulePage,
+} from "./pages/planner-pages";
 
 function Root() {
   return (
@@ -50,9 +57,9 @@ const routes = [
             children: [
               { index: true, element: <Navigate to="/schedule" replace /> },
               { path: "/schedule", element: <SchedulePage /> },
-              { path: "/forecast", element: <PlaceholderPage kind="forecast" /> },
-              { path: "/projects", element: <PlaceholderPage kind="projects" /> },
-              { path: "/people", element: <PlaceholderPage kind="people" /> },
+              { path: "/forecast", element: <ForecastPage /> },
+              { path: "/projects", element: <ProjectsPage /> },
+              { path: "/people", element: <PeoplePage /> },
               { path: "/leave", element: <PlaceholderPage kind="leave" /> },
               { path: "/more", element: <MorePage /> },
               {
