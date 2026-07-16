@@ -3,8 +3,13 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import {
+  isPublicTreeIgnoredEntry,
+  isSyncSourceIgnoredEntry,
+} from "../lib/public-generated-files.mjs";
 import {
   PublicMirrorVerificationError,
   verifyPublicCheckout,
@@ -32,8 +37,9 @@ test("package scripts route both public commands through the allowlisted wrapper
   assert.equal(manifest.scripts["public:verify"], "node tools/public-mirror-command.mjs verify");
 });
 
-async function createValidPublicFixture(extraFiles = {}) {
-  const root = await mkdtemp(join(tmpdir(), "agency-workload-public-"));
+async function createValidPublicFixture(extraFiles = {}, fixtureRoot) {
+  const root = fixtureRoot ?? (await mkdtemp(join(tmpdir(), "agency-workload-public-")));
+  await mkdir(root, { recursive: true });
   const files = {
     "README.md": "# Public fixture\n",
     "tools/check.mjs": 'console.log("safe");\n',
@@ -172,21 +178,267 @@ test("public self-verification needs only a self-contained checkout", async (t) 
   const { root } = await createValidPublicFixture();
   t.after(() => rm(root, { force: true, recursive: true }));
 
-  await mkdir(join(root, "node_modules", "generated-package"), { recursive: true });
-  await writeFile(join(root, "node_modules", "generated-package", "index.js"), "generated\n");
-  await mkdir(join(root, "apps", "web"), { recursive: true });
-  await writeFile(join(root, "apps", "web", "tsconfig.tsbuildinfo"), "generated\n");
+  const result = await verifyPublicCheckout(root);
+  assert.deepEqual(result, { fileCount: 2 });
+});
+
+test("sync omits local generated files without trusting them in the public tree", async () => {
+  const file = {
+    isDirectory: () => false,
+    isFile: () => true,
+    isSymbolicLink: () => false,
+  };
+
+  for (const name of ["build.log", "server.pid"]) {
+    assert.equal(isSyncSourceIgnoredEntry(name, file), true);
+    assert.equal(isPublicTreeIgnoredEntry(name, file), false);
+  }
+  assert.equal(isSyncSourceIgnoredEntry("tsconfig.tsbuildinfo", file), true);
+  assert.equal(isPublicTreeIgnoredEntry("tsconfig.tsbuildinfo", file), true);
+
+  const checkoutRoot = fileURLToPath(new URL("../..", import.meta.url));
+  const origin = readExactOrigin(checkoutRoot);
+  if (origin === PRIVATE_CANONICAL_ORIGIN) {
+    const syncSource = await readFile(new URL("../sync-public.mjs", import.meta.url), "utf8");
+    assert.match(syncSource, /isSyncSourceIgnoredEntry\(name, entry\)/);
+  } else {
+    assert.equal(origin, PUBLIC_MIRROR_ORIGIN);
+    await assert.rejects(readFile(new URL("../sync-public.mjs", import.meta.url)), (error) => {
+      assert.equal(error.code, "ENOENT");
+      return true;
+    });
+  }
+});
+
+test("public self-verification ignores only known generated entries at any depth", async (t) => {
+  const { root } = await createValidPublicFixture();
+  t.after(() => rm(root, { force: true, recursive: true }));
+
+  for (const path of [
+    "apps/web/.next/server/app.js",
+    "apps/web/.turbo/cache.json",
+    "apps/web/.vite/deps/index.js",
+    "apps/web/coverage/index.html",
+    "apps/web/dist/assets/app.js",
+    "apps/web/node_modules/generated-package/index.js",
+    "apps/web/node_modules/generated-package/runtime.log",
+    "apps/web/node_modules/generated-package/server.pid",
+    "apps/web/playwright-report/index.html",
+    "apps/web/test-results/results.json",
+    "packages/domain/.git/config",
+    "tmp/tsconfig.tsbuildinfo",
+  ]) {
+    await mkdir(join(root, ...path.split("/").slice(0, -1)), { recursive: true });
+    await writeFile(join(root, ...path.split("/")), "generated\n", "utf8");
+  }
 
   const result = await verifyPublicCheckout(root);
   assert.deepEqual(result, { fileCount: 2 });
 });
 
-test("temporary public-like checkout verifies and refuses sync without private files", async (t) => {
+test("public self-verification rejects managed and unmanaged logs and PID files", async (t) => {
+  const { root } = await createValidPublicFixture({ "managed.log": "managed log\n" });
+  t.after(() => rm(root, { force: true, recursive: true }));
+
+  for (const path of ["runtime.log", "tmp/build.log", "tmp/server.pid"]) {
+    await mkdir(join(root, ...path.split("/").slice(0, -1)), { recursive: true });
+    await writeFile(join(root, ...path.split("/")), "transient\n", "utf8");
+  }
+
+  await assert.rejects(verifyPublicCheckout(root), (error) => {
+    assert.ok(error instanceof PublicMirrorVerificationError);
+    for (const path of ["managed.log", "runtime.log", "tmp/build.log", "tmp/server.pid"]) {
+      assert.ok(error.failures.includes(`Forbidden public extension: ${path}`));
+    }
+    return true;
+  });
+});
+
+test("public self-verification rejects an unmanaged source file", async (t) => {
+  const { root } = await createValidPublicFixture();
+  t.after(() => rm(root, { force: true, recursive: true }));
+
+  await mkdir(join(root, "apps", "web", "src"), { recursive: true });
+  await writeFile(join(root, "apps", "web", "src", "unmanaged.ts"), "export {};\n", "utf8");
+
+  await assert.rejects(verifyPublicCheckout(root), (error) => {
+    assert.ok(error instanceof PublicMirrorVerificationError);
+    assert.ok(error.failures.includes("Unmanaged public file: apps/web/src/unmanaged.ts"));
+    return true;
+  });
+});
+
+test("generated-looking directory names cannot hide forbidden source or logs", async (t) => {
+  const { root } = await createValidPublicFixture();
+  t.after(() => rm(root, { force: true, recursive: true }));
+
+  const path = "apps/web/dist-cache/internal/note.md";
+  await mkdir(join(root, ...path.split("/").slice(0, -1)), { recursive: true });
+  await writeFile(join(root, ...path.split("/")), "private source\n", "utf8");
+  const logPath = "apps/web/node_modules-cache/build.log";
+  await mkdir(join(root, ...logPath.split("/").slice(0, -1)), { recursive: true });
+  await writeFile(join(root, ...logPath.split("/")), "transient\n", "utf8");
+
+  await assert.rejects(verifyPublicCheckout(root), (error) => {
+    assert.ok(error instanceof PublicMirrorVerificationError);
+    assert.ok(error.failures.includes(`Forbidden public path: ${path}`));
+    assert.ok(error.failures.includes(`Forbidden public extension: ${logPath}`));
+    return true;
+  });
+});
+
+test("private verifier shares generated rules and remains private-only", async (t) => {
+  const checkoutRoot = fileURLToPath(new URL("../..", import.meta.url));
+  const origin = readExactOrigin(checkoutRoot);
+  if (origin === PUBLIC_MIRROR_ORIGIN) {
+    await assert.rejects(readFile(new URL("../verify-public.mjs", import.meta.url)), (error) => {
+      assert.equal(error.code, "ENOENT");
+      return true;
+    });
+    return;
+  }
+  assert.equal(origin, PRIVATE_CANONICAL_ORIGIN);
+
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "agency-workload-private-verifier-"));
+  const privateRoot = join(fixtureRoot, "private");
+  const publicRoot = join(fixtureRoot, "public");
+  t.after(() => rm(fixtureRoot, { force: true, recursive: true }));
+
+  const privateFiles = {
+    "tools/lib/config.mjs": await readFile(new URL("../lib/config.mjs", import.meta.url)),
+    "tools/lib/public-generated-files.mjs": await readFile(
+      new URL("../lib/public-generated-files.mjs", import.meta.url),
+    ),
+    "tools/verify-public.mjs": await readFile(new URL("../verify-public.mjs", import.meta.url)),
+  };
+  for (const [path, content] of Object.entries(privateFiles)) {
+    await mkdir(join(privateRoot, ...path.split("/").slice(0, -1)), { recursive: true });
+    await writeFile(join(privateRoot, ...path.split("/")), content);
+  }
+  const { manifest } = await createValidPublicFixture({}, publicRoot);
+
+  for (const args of [
+    ["init", "--quiet"],
+    ["remote", "add", "origin", PUBLIC_MIRROR_ORIGIN],
+  ]) {
+    const git = spawnSync("git", args, { cwd: publicRoot, encoding: "utf8", windowsHide: true });
+    assert.equal(git.status, 0, git.stderr);
+  }
+
+  for (const path of [
+    "apps/web/dist/assets/app.js",
+    "apps/web/node_modules/generated-package/index.js",
+    "apps/web/node_modules/generated-package/runtime.log",
+    "apps/web/node_modules/generated-package/server.pid",
+    "tmp/tsconfig.tsbuildinfo",
+  ]) {
+    await mkdir(join(publicRoot, ...path.split("/").slice(0, -1)), { recursive: true });
+    await writeFile(join(publicRoot, ...path.split("/")), "generated\n", "utf8");
+  }
+
+  const verifierPath = join(privateRoot, "tools", "verify-public.mjs");
+  const valid = spawnSync(process.execPath, [verifierPath], {
+    cwd: privateRoot,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  assert.equal(valid.status, 0, valid.stderr);
+  assert.match(valid.stdout, /^Verified 2 public files/);
+
+  await mkdir(join(publicRoot, "tmp"), { recursive: true });
+  await writeFile(join(publicRoot, "tmp", "build.log"), "transient\n", "utf8");
+  await writeFile(join(publicRoot, "worker.pid"), "1234\n", "utf8");
+  const managedLog = "managed log\n";
+  await writeFile(join(publicRoot, "managed.log"), managedLog, "utf8");
+  manifest.files["managed.log"] = sha256(managedLog);
+  await writeFile(
+    join(publicRoot, ".mirror-manifest.json"),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf8",
+  );
+  const transient = spawnSync(process.execPath, [verifierPath], {
+    cwd: privateRoot,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  assert.equal(transient.status, 1);
+  assert.match(transient.stderr, /Forbidden public extension: managed\.log/);
+  assert.match(transient.stderr, /Forbidden public extension: tmp\/build\.log/);
+  assert.match(transient.stderr, /Forbidden public extension: worker\.pid/);
+  delete manifest.files["managed.log"];
+  await writeFile(
+    join(publicRoot, ".mirror-manifest.json"),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf8",
+  );
+  await rm(join(publicRoot, "managed.log"), { force: true });
+  await rm(join(publicRoot, "tmp"), { force: true, recursive: true });
+  await rm(join(publicRoot, "worker.pid"), { force: true });
+
+  await mkdir(join(publicRoot, "apps", "web", "src"), { recursive: true });
+  await writeFile(join(publicRoot, "apps", "web", "src", "unmanaged.ts"), "export {};\n", "utf8");
+  const unmanaged = spawnSync(process.execPath, [verifierPath], {
+    cwd: privateRoot,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  assert.equal(unmanaged.status, 1);
+  assert.match(unmanaged.stderr, /Unmanaged public file: apps\/web\/src\/unmanaged\.ts/);
+});
+
+test("temporary public-like checkout verifies after npm ci and refuses sync", async (t) => {
   const wrapper = await readFile(new URL("../public-mirror-command.mjs", import.meta.url));
   const selfVerifier = await readFile(
     new URL("../lib/public-mirror-self-verify.mjs", import.meta.url),
   );
+  const generatedFiles = await readFile(
+    new URL("../lib/public-generated-files.mjs", import.meta.url),
+  );
   const { root } = await createValidPublicFixture({
+    "package-lock.json": `${JSON.stringify(
+      {
+        name: "agency-workload-public-fixture",
+        version: "1.0.0",
+        lockfileVersion: 3,
+        requires: true,
+        packages: {
+          "": {
+            name: "agency-workload-public-fixture",
+            version: "1.0.0",
+            workspaces: ["packages/tool"],
+          },
+          "node_modules/@fixture/tool": {
+            resolved: "packages/tool",
+            link: true,
+          },
+          "packages/tool": {
+            name: "@fixture/tool",
+            version: "1.0.0",
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "package.json": `${JSON.stringify(
+      {
+        name: "agency-workload-public-fixture",
+        version: "1.0.0",
+        private: true,
+        workspaces: ["packages/tool"],
+      },
+      null,
+      2,
+    )}\n`,
+    "packages/tool/package.json": `${JSON.stringify(
+      {
+        name: "@fixture/tool",
+        version: "1.0.0",
+      },
+      null,
+      2,
+    )}\n`,
+    "tools/lib/public-generated-files.mjs": generatedFiles,
     "tools/lib/public-mirror-self-verify.mjs": selfVerifier,
     "tools/public-mirror-command.mjs": wrapper,
   });
@@ -200,13 +452,27 @@ test("temporary public-like checkout verifies and refuses sync without private f
     assert.equal(git.status, 0, git.stderr);
   }
 
+  const npmCli =
+    process.env.npm_execpath ??
+    join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+  const install = spawnSync(
+    process.execPath,
+    [npmCli, "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+    {
+      cwd: root,
+      encoding: "utf8",
+      windowsHide: true,
+    },
+  );
+  assert.equal(install.status, 0, install.stderr || install.error?.message || "npm ci failed");
+
   const verify = spawnSync(process.execPath, ["tools/public-mirror-command.mjs", "verify"], {
     cwd: root,
     encoding: "utf8",
     windowsHide: true,
   });
   assert.equal(verify.status, 0, verify.stderr);
-  assert.match(verify.stdout, /^Verified 4 public files/);
+  assert.match(verify.stdout, /^Verified 8 public files/);
 
   const sync = spawnSync(process.execPath, ["tools/public-mirror-command.mjs", "sync"], {
     cwd: root,
@@ -241,6 +507,11 @@ test("public self-verification reports hash, inventory, path, extension, symlink
     join(root, "linked-directory"),
     process.platform === "win32" ? "junction" : "dir",
   );
+  await symlink(
+    join(root, "safe-directory"),
+    join(root, "dist"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
 
   manifest.files["missing.txt"] = sha256("missing\n");
   manifest.files["internal/note.md"] = sha256("private path\n");
@@ -271,6 +542,9 @@ test("public self-verification reports hash, inventory, path, extension, symlink
       error.failures.some(
         (failure) => failure === "Symlink is not allowed publicly: linked-directory",
       ),
+    );
+    assert.ok(
+      error.failures.some((failure) => failure === "Symlink is not allowed publicly: dist"),
     );
     assert.ok(
       error.failures.some(

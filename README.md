@@ -1,5 +1,9 @@
 # Agency Workload
 
+> **Built by [BrainAI Team](https://brainai.team).** We build agentic teams and practical AI automations for growing businesses. Need this customized, integrated, hosted, or expanded for your workflow? [Work with us](https://brainai.team/hire-us).
+
+![Abstract editorial collage of measured paper strips, load-bearing blocks, and deliberate gaps arranged like a planning ledger](docs/assets/readme-cover.webp)
+
 Open-source resource and capacity planning for agencies and service teams.
 
 Agency Workload is being built around one operational question: **who can start, and when?** It

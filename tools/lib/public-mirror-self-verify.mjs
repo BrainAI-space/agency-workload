@@ -2,18 +2,9 @@ import { createHash } from "node:crypto";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 
+import { isPublicTreeIgnoredEntry } from "./public-generated-files.mjs";
+
 const manifestName = ".mirror-manifest.json";
-const ignoredDirectories = new Set([
-  ".next",
-  ".turbo",
-  ".vite",
-  "coverage",
-  "dist",
-  "node_modules",
-  "playwright-report",
-  "test-results",
-]);
-const ignoredExtensions = new Set([".tsbuildinfo"]);
 const forbiddenSegments = new Set(["backups", "internal", "node_modules", "secrets", "uploads"]);
 const forbiddenExtensions = new Set([
   ".cer",
@@ -24,6 +15,7 @@ const forbiddenExtensions = new Set([
   ".p12",
   ".pem",
   ".pfx",
+  ".pid",
   ".sql",
 ]);
 const secretPatterns = [
@@ -70,21 +62,18 @@ function inspectPath(path, entry, failures) {
 async function walk(root, directory, failures, forbiddenFiles) {
   const files = [];
   for (const name of (await readdir(directory)).sort()) {
-    if (name === ".git" || ignoredDirectories.has(name)) continue;
-
     const path = join(directory, name);
     const entry = await lstat(path);
     const relativePath = publicPath(root, path);
-    const extension = name.includes(".") ? `.${name.split(".").at(-1)}` : "";
-
-    if (entry.isFile() && ignoredExtensions.has(extension)) continue;
 
     if (entry.isSymbolicLink()) {
       failures.push(`Symlink is not allowed publicly: ${relativePath}`);
       continue;
     }
+    if (entry.isDirectory() && isPublicTreeIgnoredEntry(name, entry)) continue;
 
     const forbidden = inspectPath(relativePath, entry, failures);
+    if (entry.isFile() && isPublicTreeIgnoredEntry(name, entry)) continue;
     if (entry.isDirectory()) {
       files.push(...(await walk(root, path, failures, forbiddenFiles)));
     } else if (entry.isFile()) {
