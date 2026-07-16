@@ -1,19 +1,18 @@
-import { execFileSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import type { AppRole } from "@agency-workload/contracts";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { assertExactPostgresIntegrationBoundary } from "../../../tools/lib/postgres-integration-boundary.mjs";
 import { AdminService } from "../src/admin-service.js";
 import { AuthService, acceptPendingInvitation, type SessionContext } from "../src/auth-service.js";
 import { loadConfig } from "../src/config.js";
 import { hashOpaqueToken } from "../src/security.js";
 
 const enabled = process.env.AW_ADMIN_INTEGRATION === "1";
+if (enabled) assertExactPostgresIntegrationBoundary(process.env, "admin");
 const config = enabled ? loadConfig() : null;
 const pool = config ? new Pool({ connectionString: config.databaseUrl, max: 8 }) : null;
 const suffix = randomBytes(6).toString("hex");
-const createdUsers: string[] = [];
-const createdOrganizations: string[] = [];
 let primaryOrganization = "";
 let bootstrapOwner = "";
 let service: AdminService;
@@ -21,31 +20,6 @@ let service: AdminService;
 function db(): Pool {
   if (!pool) throw new Error("admin integration pool unavailable");
   return pool;
-}
-
-function superuserSql(sql: string): void {
-  try {
-    execFileSync(
-      "docker",
-      [
-        "exec",
-        "-i",
-        "project-postgres",
-        "psql",
-        "--username",
-        "myuser",
-        "--dbname",
-        "agency_workload",
-        "--no-psqlrc",
-        "--set",
-        "ON_ERROR_STOP=1",
-        "--quiet",
-      ],
-      { input: sql, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
-    );
-  } catch {
-    throw new Error("Admin integration cleanup failed without exposing database output");
-  }
 }
 
 function context(userId: string, organizationId: string, role: AppRole): SessionContext {
@@ -61,7 +35,6 @@ function context(userId: string, organizationId: string, role: AppRole): Session
 
 async function createUser(organizationId: string, role: AppRole): Promise<string> {
   const id = randomUUID();
-  createdUsers.push(id);
   await db().query(`INSERT INTO app.users (id, gotrue_user_id, email) VALUES ($1, $2, $3)`, [
     id,
     randomUUID(),
@@ -77,7 +50,6 @@ async function createUser(organizationId: string, role: AppRole): Promise<string
 async function createStandaloneUser(): Promise<{ id: string; email: string }> {
   const id = randomUUID();
   const email = `invitee-${randomBytes(5).toString("hex")}@agency-workload.local`;
-  createdUsers.push(id);
   await db().query(`INSERT INTO app.users (id, gotrue_user_id, email) VALUES ($1, $2, $3)`, [
     id,
     randomUUID(),
@@ -88,7 +60,6 @@ async function createStandaloneUser(): Promise<{ id: string; email: string }> {
 
 async function createOrganization(): Promise<string> {
   const id = randomUUID();
-  createdOrganizations.push(id);
   await db().query(
     `INSERT INTO app.organizations (id, slug, name) VALUES ($1, $2, 'Integration')`,
     [id, `integration-${randomBytes(5).toString("hex")}`],
@@ -96,20 +67,34 @@ async function createOrganization(): Promise<string> {
   return id;
 }
 
+function startAtBarrier(operations: readonly (() => Promise<unknown>)[]) {
+  let release: () => void = () => undefined;
+  const barrier = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let issued = 0;
+  const promises = operations.map((operation) => {
+    issued += 1;
+    return barrier.then(operation);
+  });
+  return { issued, promises, release };
+}
+
+function expectSerializedBusinessRejection(
+  results: PromiseSettledResult<unknown>[],
+  publicCode: string,
+): void {
+  expect(results.map((result) => result.status).sort()).toEqual(["fulfilled", "rejected"]);
+  const rejected = results.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (!rejected) throw new Error("concurrency rejection unavailable");
+  expect(rejected.reason).toEqual(expect.objectContaining({ publicCode, statusCode: 409 }));
+  expect((rejected.reason as { code?: string }).code).not.toBe("40P01");
+}
+
 describe.skipIf(!enabled)("admin authorization and concurrency integration", () => {
   beforeAll(async () => {
-    superuserSql(`
-      SET session_replication_role = replica;
-      DELETE FROM app.audit_events WHERE organization_id IN (SELECT id FROM app.organizations WHERE slug LIKE 'integration-%');
-      DELETE FROM app.sessions WHERE organization_id IN (SELECT id FROM app.organizations WHERE slug LIKE 'integration-%');
-      DELETE FROM app.auth_requests WHERE organization_id IN (SELECT id FROM app.organizations WHERE slug LIKE 'integration-%');
-      DELETE FROM app.invitations WHERE organization_id IN (SELECT id FROM app.organizations WHERE slug LIKE 'integration-%');
-      DELETE FROM app.memberships WHERE organization_id IN (SELECT id FROM app.organizations WHERE slug LIKE 'integration-%');
-      DELETE FROM app.organizations WHERE slug LIKE 'integration-%';
-      DELETE FROM app.users WHERE email ~ '^(admin|member|owner)-[0-9a-f]+@agency-workload[.]local$'
-        AND NOT EXISTS (SELECT 1 FROM app.memberships WHERE user_id = app.users.id);
-      SET session_replication_role = origin;
-    `);
     const owner = await db().query<{ user_id: string; organization_id: string }>(
       `SELECT user_id, organization_id FROM app.memberships WHERE role = 'owner' AND active ORDER BY created_at LIMIT 1`,
     );
@@ -121,21 +106,7 @@ describe.skipIf(!enabled)("admin authorization and concurrency integration", () 
   });
 
   afterAll(async () => {
-    if (!pool) return;
-    await pool.end();
-    const organizations = createdOrganizations.map((id) => `'${id}'`).join(",") || "NULL";
-    const users = createdUsers.map((id) => `'${id}'`).join(",") || "NULL";
-    superuserSql(`
-      SET session_replication_role = replica;
-      DELETE FROM app.audit_events WHERE organization_id IN (${organizations}) OR actor_user_id IN (${users});
-      DELETE FROM app.sessions WHERE organization_id IN (${organizations}) OR user_id IN (${users});
-      DELETE FROM app.auth_requests WHERE organization_id IN (${organizations});
-      DELETE FROM app.invitations WHERE organization_id IN (${organizations}) OR invited_by IN (${users});
-      DELETE FROM app.memberships WHERE organization_id IN (${organizations}) OR user_id IN (${users});
-      DELETE FROM app.organizations WHERE id IN (${organizations});
-      DELETE FROM app.users WHERE id IN (${users});
-      SET session_replication_role = origin;
-    `);
+    await pool?.end();
   });
 
   it("denies every admin operation to planner, member, and viewer", async () => {
@@ -192,11 +163,14 @@ describe.skipIf(!enabled)("admin authorization and concurrency integration", () 
     const organizationId = await createOrganization();
     const first = await createUser(organizationId, "owner");
     const second = await createUser(organizationId, "owner");
-    const results = await Promise.allSettled([
-      service.deactivate(context(first, organizationId, "owner"), second),
-      service.deactivate(context(second, organizationId, "owner"), first),
+    const start = startAtBarrier([
+      () => service.deactivate(context(first, organizationId, "owner"), second),
+      () => service.deactivate(context(second, organizationId, "owner"), first),
     ]);
-    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(start.issued).toBe(2);
+    start.release();
+    const results = await Promise.allSettled(start.promises);
+    expectSerializedBusinessRejection(results, "last_owner_protected");
     const owners = await db().query<{ count: string }>(
       `SELECT count(*)::text AS count FROM app.memberships
        WHERE organization_id = $1 AND role = 'owner' AND active`,
@@ -210,21 +184,20 @@ describe.skipIf(!enabled)("admin authorization and concurrency integration", () 
     const otherOwner = await createUser(otherOrganization, "owner");
     const owner = context(bootstrapOwner, primaryOrganization, "owner");
     const invited = `concurrent-${suffix}@agency-workload.local`;
-    const results = await Promise.allSettled([
-      service.createInvitation(owner, invited, "viewer", "127.0.0.1"),
-      service.createInvitation(
-        context(otherOwner, otherOrganization, "owner"),
-        invited,
-        "viewer",
-        "127.0.0.1",
-      ),
+    const start = startAtBarrier([
+      () => service.createInvitation(owner, invited, "viewer", "127.0.0.1"),
+      () =>
+        service.createInvitation(
+          context(otherOwner, otherOrganization, "owner"),
+          invited,
+          "viewer",
+          "127.0.0.1",
+        ),
     ]);
-    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-    await db().query(`DELETE FROM app.auth_requests WHERE organization_id IN ($1, $2)`, [
-      primaryOrganization,
-      otherOrganization,
-    ]);
-    await db().query(`DELETE FROM app.invitations WHERE email = $1`, [invited]);
+    expect(start.issued).toBe(2);
+    start.release();
+    const results = await Promise.allSettled(start.promises);
+    expectSerializedBusinessRejection(results, "invitation_exists");
   });
 
   it("serializes concurrent invitation acceptance", async () => {
@@ -256,7 +229,10 @@ describe.skipIf(!enabled)("admin authorization and concurrency integration", () 
         client.release();
       }
     };
-    const results = await Promise.all([accept(), accept()]);
+    const start = startAtBarrier([accept, accept]);
+    expect(start.issued).toBe(2);
+    start.release();
+    const results = await Promise.all(start.promises);
     expect(results.filter((role) => role === "member")).toHaveLength(1);
     expect(results.filter((role) => role === null)).toHaveLength(1);
   });
@@ -324,10 +300,6 @@ describe.skipIf(!enabled)("admin authorization and concurrency integration", () 
     await expect(delivery.resendInvitation(owner, created.id, "127.0.0.1")).rejects.toMatchObject({
       publicCode: "invitation_expired",
     });
-    await db().query(`DELETE FROM app.auth_requests WHERE organization_id = $1`, [
-      primaryOrganization,
-    ]);
-    await db().query(`DELETE FROM app.invitations WHERE id = $1`, [created.id]);
   });
 
   it("rolls back session revocation when audit insertion fails", async () => {

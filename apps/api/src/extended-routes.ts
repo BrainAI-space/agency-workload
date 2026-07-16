@@ -1,16 +1,24 @@
 import {
+  ClientNameBody,
   ConflictFingerprintParams,
   ConflictQuery,
   EarliestStartBody,
   ForecastQuery,
   HolidayAssignmentBody,
+  HolidayCalendarNameBody,
   HolidayDateBody,
   IdParams,
   LeaveEntryBody,
   LeaveRangeQuery,
-  NameBody,
+  LeaveTypeNameBody,
+  TagNameBody,
+  TeamOrRoleNameBody,
+  UpdateClientNameBody,
+  UpdateHolidayCalendarNameBody,
   UpdateLeaveEntryBody,
-  UpdateNameBody,
+  UpdateLeaveTypeNameBody,
+  UpdateTagNameBody,
+  UpdateTeamOrRoleNameBody,
   VersionBody,
 } from "@agency-workload/contracts";
 import { type Static, Type } from "@sinclair/typebox";
@@ -42,6 +50,17 @@ interface Dependencies {
   csrfFor(request: FastifyRequest, session: SessionContext): void;
 }
 
+interface NamedCreateBody {
+  name: string;
+}
+
+interface NamedUpdateBody extends NamedCreateBody {
+  rowVersion: number;
+}
+
+type CatalogCreateSchema = typeof TeamOrRoleNameBody | typeof TagNameBody;
+type CatalogUpdateSchema = typeof UpdateTeamOrRoleNameBody | typeof UpdateTagNameBody;
+
 const HolidayDateParams = Type.Object(
   {
     id: Type.String({ format: "uuid" }),
@@ -53,34 +72,44 @@ const HolidayDateParams = Type.Object(
 export function registerExtendedRoutes(app: FastifyInstance, dependencies: Dependencies): void {
   const { catalog, calendar, derived, sessionFor, csrfFor } = dependencies;
 
-  for (const [path, kind] of [
-    ["teams", "teams"],
-    ["delivery-roles", "delivery_roles"],
-    ["tags", "tags"],
-  ] as const) {
-    registerNamedCatalog(app, dependencies, path, kind);
-  }
+  registerNamedCatalog(
+    app,
+    dependencies,
+    "teams",
+    "teams",
+    TeamOrRoleNameBody,
+    UpdateTeamOrRoleNameBody,
+  );
+  registerNamedCatalog(
+    app,
+    dependencies,
+    "delivery-roles",
+    "delivery_roles",
+    TeamOrRoleNameBody,
+    UpdateTeamOrRoleNameBody,
+  );
+  registerNamedCatalog(app, dependencies, "tags", "tags", TagNameBody, UpdateTagNameBody);
 
   app.get(
     "/api/v1/clients",
     { schema: { response: commonResponses(NamedListResponse) } },
     async (request) => catalog.listClients(await sessionFor(request)),
   );
-  app.post<{ Body: Static<typeof NameBody> }>(
+  app.post<{ Body: Static<typeof ClientNameBody> }>(
     "/api/v1/clients",
-    { schema: { body: NameBody, response: commonResponses(NamedItemResponse) } },
+    { schema: { body: ClientNameBody, response: commonResponses(NamedItemResponse) } },
     async (request) => {
       const actor = await sessionFor(request);
       csrfFor(request, actor);
       return catalog.createClient(actor, request.body.name);
     },
   );
-  app.patch<{ Params: Static<typeof IdParams>; Body: Static<typeof UpdateNameBody> }>(
+  app.patch<{ Params: Static<typeof IdParams>; Body: Static<typeof UpdateClientNameBody> }>(
     "/api/v1/clients/:id",
     {
       schema: {
         params: IdParams,
-        body: UpdateNameBody,
+        body: UpdateClientNameBody,
         response: commonResponses(NamedItemResponse),
       },
     },
@@ -111,21 +140,29 @@ export function registerExtendedRoutes(app: FastifyInstance, dependencies: Depen
     { schema: { response: commonResponses(HolidayCalendarListResponse) } },
     async (request) => calendar.listHolidayCalendars(await sessionFor(request)),
   );
-  app.post<{ Body: Static<typeof NameBody> }>(
+  app.post<{ Body: Static<typeof HolidayCalendarNameBody> }>(
     "/api/v1/holiday-calendars",
-    { schema: { body: NameBody, response: commonResponses(HolidayCalendarResponse) } },
+    {
+      schema: {
+        body: HolidayCalendarNameBody,
+        response: commonResponses(HolidayCalendarResponse),
+      },
+    },
     async (request) => {
       const actor = await sessionFor(request);
       csrfFor(request, actor);
       return calendar.createHolidayCalendar(actor, request.body.name);
     },
   );
-  app.patch<{ Params: Static<typeof IdParams>; Body: Static<typeof UpdateNameBody> }>(
+  app.patch<{
+    Params: Static<typeof IdParams>;
+    Body: Static<typeof UpdateHolidayCalendarNameBody>;
+  }>(
     "/api/v1/holiday-calendars/:id",
     {
       schema: {
         params: IdParams,
-        body: UpdateNameBody,
+        body: UpdateHolidayCalendarNameBody,
         response: commonResponses(HolidayCalendarResponse),
       },
     },
@@ -193,6 +230,16 @@ export function registerExtendedRoutes(app: FastifyInstance, dependencies: Depen
       const actor = await sessionFor(request);
       csrfFor(request, actor);
       await calendar.assignHolidayCalendar(actor, request.params.id, request.body.calendarId);
+      return { ok: true as const };
+    },
+  );
+  app.delete<{ Params: Static<typeof IdParams> }>(
+    "/api/v1/people/:id/holiday-calendar",
+    { schema: { params: IdParams, response: commonResponses(EmptyResponse) } },
+    async (request) => {
+      const actor = await sessionFor(request);
+      csrfFor(request, actor);
+      await calendar.unassignHolidayCalendar(actor, request.params.id);
       return { ok: true as const };
     },
   );
@@ -299,6 +346,8 @@ function registerNamedCatalog(
   dependencies: Dependencies,
   path: string,
   kind: CatalogKind,
+  createSchema: CatalogCreateSchema,
+  updateSchema: CatalogUpdateSchema,
 ) {
   const { catalog, sessionFor, csrfFor } = dependencies;
   app.get(
@@ -306,21 +355,21 @@ function registerNamedCatalog(
     { schema: { response: commonResponses(NamedListResponse) } },
     async (request) => catalog.list(await sessionFor(request), kind),
   );
-  app.post<{ Body: Static<typeof NameBody> }>(
+  app.post<{ Body: NamedCreateBody }>(
     `/api/v1/${path}`,
-    { schema: { body: NameBody, response: commonResponses(NamedItemResponse) } },
+    { schema: { body: createSchema, response: commonResponses(NamedItemResponse) } },
     async (request) => {
       const actor = await sessionFor(request);
       csrfFor(request, actor);
       return catalog.create(actor, kind, request.body.name);
     },
   );
-  app.patch<{ Params: Static<typeof IdParams>; Body: Static<typeof UpdateNameBody> }>(
+  app.patch<{ Params: Static<typeof IdParams>; Body: NamedUpdateBody }>(
     `/api/v1/${path}/:id`,
     {
       schema: {
         params: IdParams,
-        body: UpdateNameBody,
+        body: updateSchema,
         response: commonResponses(NamedItemResponse),
       },
     },
@@ -350,21 +399,21 @@ function registerNamedCatalog(
 
 function registerLeaveTypeMutations(app: FastifyInstance, dependencies: Dependencies) {
   const { calendar, sessionFor, csrfFor } = dependencies;
-  app.post<{ Body: Static<typeof NameBody> }>(
+  app.post<{ Body: Static<typeof LeaveTypeNameBody> }>(
     "/api/v1/leave-types",
-    { schema: { body: NameBody, response: commonResponses(NamedItemResponse) } },
+    { schema: { body: LeaveTypeNameBody, response: commonResponses(NamedItemResponse) } },
     async (request) => {
       const actor = await sessionFor(request);
       csrfFor(request, actor);
       return calendar.createLeaveType(actor, request.body.name);
     },
   );
-  app.patch<{ Params: Static<typeof IdParams>; Body: Static<typeof UpdateNameBody> }>(
+  app.patch<{ Params: Static<typeof IdParams>; Body: Static<typeof UpdateLeaveTypeNameBody> }>(
     "/api/v1/leave-types/:id",
     {
       schema: {
         params: IdParams,
-        body: UpdateNameBody,
+        body: UpdateLeaveTypeNameBody,
         response: commonResponses(NamedItemResponse),
       },
     },

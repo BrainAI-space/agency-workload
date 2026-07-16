@@ -49,7 +49,10 @@ zero percent. Range utilization first sums all minute numerators and denominator
 the percentage. Daily percentages are never averaged.
 
 Conflicts are derived, not stored. Their stable fingerprint includes person, date, severity,
-capacity, confirmed minutes, and tentative minutes.
+capacity, and confirmed minutes. Confirmed-conflict fingerprints exclude tentative demand, so
+changing tentative work cannot invalidate an acknowledgement of an unchanged confirmed conflict.
+Potential-conflict fingerprints additionally include tentative minutes because that demand is part
+of the potential overbook source.
 
 ## Earliest Start
 
@@ -59,8 +62,13 @@ tentative scenario. Weekends, holidays, and leave extend the completion date. A 
 than seven days breaks the sequence. Search is explicitly bounded to 1-730 calendar days.
 
 `POST /api/v1/earliest-start` exposes this search with a 1-60 workday bound and maximum 365-day
-horizon. Results contain person, start/end, minimum headroom, and a stable explanation. Search never
-creates an allocation.
+horizon. Results contain person, start/end, minimum headroom, `continuousAllocationSafe`, and a
+stable explanation. `continuousAllocationSafe` is true only when adding the requested fixed
+`dailyMinutes` allocation on every civil date from result start through result end does not exceed
+that date's availability under the requested scenario. The additional demand uses the normal
+allocation formula: baseline-zero weekends add zero demand and are safe, while holidays or full-day
+leave on otherwise scheduled weekdays retain fixed demand and make a continuous allocation unsafe
+when availability is insufficient. Search never creates an allocation.
 
 ## Schema
 
@@ -80,6 +88,11 @@ Every planning table carries `organization_id`. Composite same-organization fore
 planning relationships. Mutable records use positive `row_version` values. Schedules use a
 transactional overlap trigger with a per-person advisory lock. Runtime and backup grants are applied
 without widening audit-table permissions.
+
+Forward migration `0009_down_migration_checksums` preserves the original up checksums for migrations
+`0001` through `0008` and adds a separate exact-down-SQL binding. Existing installations must run the
+normal forward migration once before rollback. See `docs/local-infrastructure.md` for the stable
+refusal and operator sequence.
 
 ## HTTP Boundary
 
@@ -152,12 +165,38 @@ billable/internal minutes; confirmed and potential utilization; overbook; and bi
 The response includes generation time and an assumptions sentence. It contains no rates, revenue, or
 other financial fields.
 
+## Migration 0008 Operator Gate
+
+Migration `0008_forecast_horizon_v1_bounds` is intentionally non-destructive. It stops and rolls back
+when any existing organization has a forecast horizon outside the new 13-52 week range; it never
+clamps or rewrites that value automatically.
+
+Identify only affected organizations and their current values:
+
+```sql
+SELECT settings.organization_id, organization.slug, settings.forecast_horizon_weeks
+FROM app.organization_planning_settings settings
+JOIN app.organizations organization ON organization.id = settings.organization_id
+WHERE settings.forecast_horizon_weeks NOT BETWEEN 13 AND 52
+ORDER BY settings.organization_id;
+```
+
+Resolve each result through `PATCH /api/v1/planning/settings` with the current full settings payload
+and `rowVersion`. If the API cannot be used during an upgrade, use a separately reviewed transaction
+that locks only the affected settings row, writes an approved 13-52 value, increments `row_version`,
+and updates `updated_at`. Do not bulk-update unrelated organizations. Then rerun `npm run db:migrate`;
+the migration will add the 13-52 database constraint once no blocking values remain.
+
 ## Verification And Supported Dataset
 
 - 22 named golden cases derived from the supplied milestone rules
 - two fixed-seed fast-check properties with 1,000 cases each
-- isolated fresh/up/rerun/checksum/rollback/grant migration tests
-- real PostgreSQL CRUD, concurrency, cross-organization, stale-write, guard, and audit rollback tests
+- isolated fresh/upgrade/backfill/rerun, separate up/down drift, failed rollback, and explicit
+  privilege migration tests
+- real PostgreSQL CRUD, cross-organization, stale-write, guard, and audit rollback tests
+- allocation/parent and client/project races held behind a dedicated target-row lock until both
+  backend chains are observed blocked and both promises are proven unsettled; release then permits
+  one valid winner and one business rejection, with final invariants and no deadlock
 - HTTP validation, CSRF, status, redaction, and five-role matrix tests
 - local performance smoke: 100 people, 2,000 allocations, 52 weeks, threshold 1.5 seconds
 

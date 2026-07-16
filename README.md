@@ -46,19 +46,53 @@ Requirements:
 
 - Node.js 24 or newer
 - npm 11 or newer
-- PostgreSQL 16
-- Docker for local Supabase Auth and Mailpit
+- Docker for disposable integration/browser tests or the optional persistent development stack
+- PostgreSQL 16 only for the optional persistent development stack
 
 The Vite application runs on `localhost:3100` and proxies `/api` only to Fastify on
 `127.0.0.1:4100`.
 
-Install and verify the current foundation:
+### Clean Verification
+
+From a clean public clone:
 
 ```bash
 npm ci
 npm run verify
+```
+
+`npm run verify` is the normal public clean-clone gate. It does not require a repository `.env`,
+private mirror files, or persistent PostgreSQL, GoTrue, and Mailpit services.
+
+### Disposable Integration And Browser Tests
+
+With local Docker available, these commands create their own credentials, ports, database, GoTrue,
+and Mailpit state in a generated Compose project:
+
+```bash
+npm run test:db:integration
+npm run test:admin:integration
+npm run test:planning:integration
+npm run test:extended:integration
+npm run test:auth:integration
 npm run test:browser:smoke
 ```
+
+They do not read `.env` or connect to the optional persistent development services. Each command
+removes its generated resources before returning.
+
+### Optional Persistent Development Setup
+
+`.env.example` documents the shared local container names, ports, and origins for the optional
+canonical persistent development setup. To use that exact layout deliberately, run:
+
+```bash
+npm run local:bootstrap
+```
+
+The private canonical repository also exposes `npm run test:bootstrap:integration` to verify this
+persistent role/bootstrap path. The public origin refuses that command before `.env`, Docker, or
+database access because it is not part of the public clean-clone gate.
 
 Local database, GoTrue, and Mailpit setup is documented in
 [`docs/local-infrastructure.md`](docs/local-infrastructure.md).

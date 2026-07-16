@@ -1,8 +1,11 @@
 import type { AppRole } from "@agency-workload/contracts";
+import type { Pool } from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { SessionContext } from "../src/auth-service.js";
+import { CalendarService } from "../src/calendar-service.js";
 import type { CatalogKind } from "../src/catalog-service.js";
+import { DerivedService } from "../src/derived-service.js";
 import { HttpError } from "../src/errors.js";
 import type { ApplicationServices } from "../src/services.js";
 
@@ -51,7 +54,7 @@ function services(role: AppRole): ApplicationServices {
         planner();
         return { id: itemId, name: "Client", rowVersion: 1 };
       }),
-      updateClient: vi.fn(async () => ({})),
+      updateClient: vi.fn(async () => ({ id: itemId, name: "Client", rowVersion: 2 })),
       archiveClient: vi.fn(async () => undefined),
     } as unknown as ApplicationServices["catalog"],
     calendar: {
@@ -88,8 +91,9 @@ function services(role: AppRole): ApplicationServices {
       }),
       removeHolidayDate: vi.fn(async () => structure()),
       assignHolidayCalendar: vi.fn(async () => structure()),
-      createLeaveType: vi.fn(async () => ({})),
-      updateLeaveType: vi.fn(async () => ({})),
+      unassignHolidayCalendar: vi.fn(async () => structure()),
+      createLeaveType: vi.fn(async () => ({ id: itemId, name: "Leave", rowVersion: 1 })),
+      updateLeaveType: vi.fn(async () => ({ id: itemId, name: "Leave", rowVersion: 2 })),
       archiveLeaveType: vi.fn(async () => undefined),
       createLeave: vi.fn(async () => {
         if (role === "viewer") throw new HttpError(404, "leave_not_found");
@@ -177,6 +181,66 @@ describe("deferred V1 route role and serialization matrix", () => {
     }
   });
 
+  it("rejects whitespace-only catalog names before service execution", async () => {
+    const app = await appFor("owner");
+    for (const request of [
+      { method: "POST", url: "/api/v1/teams", payload: { name: "   " } },
+      {
+        method: "PATCH",
+        url: `/api/v1/teams/${itemId}`,
+        payload: { name: "\t", rowVersion: 1 },
+      },
+      { method: "POST", url: "/api/v1/clients", payload: { name: "\n " } },
+    ] as const) {
+      const response = await app.inject({ ...request, headers: mutationHeaders });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({ error: "invalid_request" });
+    }
+  });
+
+  it("matches each catalog name boundary to its database constraint", async () => {
+    const app = await appFor("owner");
+    const cases = [
+      ["teams", 100],
+      ["delivery-roles", 100],
+      ["tags", 60],
+      ["clients", 120],
+      ["holiday-calendars", 100],
+      ["leave-types", 80],
+    ] as const;
+    for (const [path, maximum] of cases) {
+      const acceptedCreate = await app.inject({
+        method: "POST",
+        url: `/api/v1/${path}`,
+        headers: mutationHeaders,
+        payload: { name: "a".repeat(maximum) },
+      });
+      expect(acceptedCreate.statusCode, `${path} create maximum`).toBe(200);
+      const rejectedCreate = await app.inject({
+        method: "POST",
+        url: `/api/v1/${path}`,
+        headers: mutationHeaders,
+        payload: { name: "a".repeat(maximum + 1) },
+      });
+      expect(rejectedCreate.statusCode, `${path} create maximum + 1`).toBe(400);
+
+      const acceptedUpdate = await app.inject({
+        method: "PATCH",
+        url: `/api/v1/${path}/${itemId}`,
+        headers: mutationHeaders,
+        payload: { name: "b".repeat(maximum), rowVersion: 1 },
+      });
+      expect(acceptedUpdate.statusCode, `${path} update maximum`).toBe(200);
+      const rejectedUpdate = await app.inject({
+        method: "PATCH",
+        url: `/api/v1/${path}/${itemId}`,
+        headers: mutationHeaders,
+        payload: { name: "b".repeat(maximum + 1), rowVersion: 1 },
+      });
+      expect(rejectedUpdate.statusCode, `${path} update maximum + 1`).toBe(400);
+    }
+  });
+
   it("limits every holiday calendar structure mutation to owner/admin", async () => {
     for (const role of ["owner", "admin", "planner", "member", "viewer"] as const) {
       const app = await appFor(role);
@@ -207,12 +271,38 @@ describe("deferred V1 route role and serialization matrix", () => {
           url: `/api/v1/people/${itemId}/holiday-calendar`,
           payload: { calendarId: itemId },
         },
+        {
+          method: "DELETE",
+          url: `/api/v1/people/${itemId}/holiday-calendar`,
+          payload: {},
+        },
       ] as const;
       for (const request of requests) {
         const response = await app.inject({ ...request, headers: mutationHeaders });
         expect(response.statusCode).toBe(["owner", "admin"].includes(role) ? 200 : 403);
       }
     }
+  });
+
+  it("returns the stable non-enumerating error for unavailable calendar assignments", async () => {
+    const service = services("owner");
+    service.calendar.unassignHolidayCalendar = vi.fn(async () => {
+      throw new HttpError(404, "holiday_calendar_assignment_not_found");
+    });
+    const app = await buildApp({
+      logger: false,
+      config: { appOrigin: "http://localhost:3100", environment: "test" },
+      services: service,
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/people/${itemId}/holiday-calendar`,
+      headers: mutationHeaders,
+      payload: {},
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: "holiday_calendar_assignment_not_found" });
   });
 
   it("returns stable duplicate conflict codes from service errors", async () => {
@@ -261,6 +351,87 @@ describe("deferred V1 route role and serialization matrix", () => {
       expect(response.statusCode).toBe(409);
       expect(response.json()).toEqual({ error: code });
     }
+  });
+
+  it("maps invalid extended calendar dates to a stable 400 error", async () => {
+    const service = services("owner");
+    service.calendar = new CalendarService({} as Pool);
+    const app = await buildApp({
+      logger: false,
+      config: { appOrigin: "http://localhost:3100", environment: "test" },
+      services: service,
+    });
+    apps.push(app);
+    const list = await app.inject({
+      method: "GET",
+      url: "/api/v1/leave?start=2030-02-30&end=2030-03-01",
+      headers: authHeaders,
+    });
+    expect(list.statusCode).toBe(400);
+    expect(list.json()).toEqual({ error: "invalid_calendar_date" });
+
+    const mutation = await app.inject({
+      method: "POST",
+      url: `/api/v1/holiday-calendars/${itemId}/dates`,
+      headers: mutationHeaders,
+      payload: { date: "2030-02-30", name: "Invalid" },
+    });
+    expect(mutation.statusCode).toBe(400);
+    expect(mutation.json()).toEqual({ error: "invalid_calendar_date" });
+  });
+
+  it("maps invalid derived-operation dates to a stable 400 error", async () => {
+    const service = services("viewer");
+    const pool = {
+      query: vi.fn(async () => ({
+        rows: [
+          {
+            timezone: "UTC",
+            week_starts_on: 1,
+            forecast_horizon_weeks: 13,
+            billable_target_percent: 75,
+          },
+        ],
+      })),
+    } as unknown as Pool;
+    service.derived = new DerivedService(pool);
+    const app = await buildApp({
+      logger: false,
+      config: { appOrigin: "http://localhost:3100", environment: "test" },
+      services: service,
+    });
+    apps.push(app);
+
+    const conflicts = await app.inject({
+      method: "GET",
+      url: "/api/v1/conflicts?start=2030-02-30&end=2030-03-01&scenario=confirmed",
+      headers: authHeaders,
+    });
+    expect(conflicts.statusCode).toBe(400);
+    expect(conflicts.json()).toEqual({ error: "invalid_calendar_date" });
+
+    const earliest = await app.inject({
+      method: "POST",
+      url: "/api/v1/earliest-start",
+      headers: mutationHeaders,
+      payload: {
+        notBefore: "2030-02-30",
+        workdayCount: 5,
+        dailyMinutes: 60,
+        scenario: "confirmed",
+        horizonDays: 30,
+      },
+    });
+    expect(earliest.statusCode).toBe(400);
+    expect(earliest.json()).toEqual({ error: "invalid_calendar_date" });
+
+    const forecast = await app.inject({
+      method: "GET",
+      url: "/api/v1/forecast?start=2030-02-30&weeks=13",
+      headers: authHeaders,
+    });
+    expect(forecast.statusCode).toBe(400);
+    expect(forecast.json()).toEqual({ error: "invalid_calendar_date" });
   });
 
   it("redacts viewer leave details and rejects viewer mutation non-enumerating", async () => {
@@ -387,5 +558,51 @@ describe("deferred V1 route role and serialization matrix", () => {
       headers: authHeaders,
     });
     expect(invalidForecast.statusCode).toBe(400);
+  });
+
+  it("serializes continuous allocation safety and strips unknown earliest-start fields", async () => {
+    const service = services("viewer");
+    service.derived.earliestStart = vi.fn(async () => [
+      {
+        personId: itemId,
+        start: "2030-01-11",
+        end: "2030-01-14",
+        minimumHeadroomMinutes: 420,
+        continuousAllocationSafe: true,
+        explanation: "Weekend dates have zero baseline demand.",
+        secret: "drop",
+      },
+    ]);
+    const app = await buildApp({
+      logger: false,
+      config: { appOrigin: "http://localhost:3100", environment: "test" },
+      services: service,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/earliest-start",
+      headers: mutationHeaders,
+      payload: {
+        notBefore: "2030-01-11",
+        workdayCount: 2,
+        dailyMinutes: 60,
+        scenario: "confirmed",
+        horizonDays: 14,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual([
+      {
+        personId: itemId,
+        start: "2030-01-11",
+        end: "2030-01-14",
+        minimumHeadroomMinutes: 420,
+        continuousAllocationSafe: true,
+        explanation: "Weekend dates have zero baseline demand.",
+      },
+    ]);
   });
 });

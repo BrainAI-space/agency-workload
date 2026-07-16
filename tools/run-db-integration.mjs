@@ -1,19 +1,11 @@
-import { spawnSync } from "node:child_process";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const result = spawnSync(
-  process.execPath,
-  [
-    "node_modules/vitest/vitest.mjs",
-    "run",
-    "packages/db/test/integration.test.ts",
-    "--testTimeout=30000",
-    "--hookTimeout=30000",
-  ],
-  {
-    encoding: "utf8",
-    env: { ...process.env, AW_DB_INTEGRATION: "1" },
-    stdio: "inherit",
-    windowsHide: true,
-  },
-);
-process.exitCode = result.status ?? 1;
+import { runDisposablePostgresIntegration } from "./lib/disposable-postgres-integration.mjs";
+
+const root = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
+await runDisposablePostgresIntegration({
+  root,
+  suite: "db",
+  testFile: "packages/db/test/integration.test.ts",
+});

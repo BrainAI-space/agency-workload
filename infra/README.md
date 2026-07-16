@@ -3,6 +3,10 @@
 The local foundation uses the existing `project-postgres` PostgreSQL 16 container, plus pinned
 GoTrue and Mailpit containers. The web and API applications continue to run natively.
 
+This is the optional canonical persistent development setup described by `.env.example`. It is not
+required for `npm run verify` or the disposable PostgreSQL, auth, and browser commands, which do not
+read the repository `.env`.
+
 ## Setup
 
 Requirements:
@@ -26,6 +30,10 @@ npm run auth:health
 creates the dedicated database, roles, and schemas. It preserves existing secrets on later runs.
 It refuses a different container name, PostgreSQL major version, host port, maintenance database,
 superuser, or application database.
+
+The private canonical origin can run `npm run test:bootstrap:integration` to verify this exact role
+bootstrap and migration path. Public and unknown origins refuse before `.env`, Docker, or database
+access; public clean-clone verification remains `npm run verify`.
 
 The generated file uses mode `0600` on POSIX. On Windows, inherited ACLs are removed and access is
 limited to the current user, `SYSTEM`, and local administrators.

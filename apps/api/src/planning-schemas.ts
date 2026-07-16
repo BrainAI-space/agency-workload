@@ -124,6 +124,8 @@ const DailyCapacityResponse = Type.Object(
     capacityMinutes: Type.Integer(),
     confirmedMinutes: Type.Integer(),
     tentativeMinutes: Type.Integer(),
+    tentativeBillableMinutes: Type.Integer(),
+    tentativeInternalMinutes: Type.Integer(),
     billableConfirmedMinutes: Type.Integer(),
     internalConfirmedMinutes: Type.Integer(),
     availableConfirmedMinutes: Type.Integer(),

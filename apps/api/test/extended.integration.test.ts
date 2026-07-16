@@ -1,14 +1,19 @@
-import { execFileSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  assertExactPostgresIntegrationBoundary,
+  runDisposablePostgresSql,
+} from "../../../tools/lib/postgres-integration-boundary.mjs";
 import type { SessionContext } from "../src/auth-service.js";
 import { CalendarService } from "../src/calendar-service.js";
 import { CatalogService } from "../src/catalog-service.js";
 import { DerivedService } from "../src/derived-service.js";
 import { PlanningService } from "../src/planning-service.js";
+import { runRowLockRace } from "./row-lock-race.js";
 
 const enabled = process.env.AW_EXTENDED_INTEGRATION === "1";
+if (enabled) assertExactPostgresIntegrationBoundary(process.env, "extended");
 const pool = enabled ? new Pool({ connectionString: process.env.DATABASE_URL, max: 8 }) : null;
 const suffix = randomBytes(5).toString("hex");
 let organizationId = "";
@@ -44,25 +49,7 @@ function context(
 }
 
 function superuserSql(sql: string): void {
-  const result = execFileSync(
-    "docker",
-    [
-      "exec",
-      "-i",
-      "project-postgres",
-      "psql",
-      "--username",
-      "myuser",
-      "--dbname",
-      "agency_workload",
-      "--no-psqlrc",
-      "--set",
-      "ON_ERROR_STOP=1",
-      "--quiet",
-    ],
-    { input: sql, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
-  );
-  void result;
+  runDisposablePostgresSql(process.env, "extended", sql);
 }
 
 const week = Array.from({ length: 7 }, (_, index) => ({
@@ -95,14 +82,6 @@ describe.skipIf(!enabled)("deferred V1 APIs PostgreSQL integration", () => {
 
   afterAll(async () => {
     await pool?.end();
-    superuserSql(`
-      SET session_replication_role = replica;
-      DELETE FROM app.audit_events WHERE organization_id IN ('${organizationId}', '${secondOrganizationId}');
-      DELETE FROM app.memberships WHERE organization_id IN ('${organizationId}', '${secondOrganizationId}');
-      DELETE FROM app.organizations WHERE id IN ('${organizationId}', '${secondOrganizationId}');
-      DELETE FROM app.users WHERE id IN ('${ownerUserId}', '${memberUserId}');
-      SET session_replication_role = origin;
-    `);
   });
 
   it("manages catalogs with uniqueness, stale versions, role matrix, and archived assignment guard", async () => {
@@ -209,6 +188,89 @@ describe.skipIf(!enabled)("deferred V1 APIs PostgreSQL integration", () => {
     expect(await catalog.listClients(owner)).toHaveLength(1);
   });
 
+  it("serializes client archive with project create and update without deadlock", async () => {
+    const assertSerialized = (results: PromiseSettledResult<unknown>[]) => {
+      expect(results.map((result) => result.status).sort()).toEqual(["fulfilled", "rejected"]);
+      const rejected = results.find(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (!rejected) throw new Error("client/project race rejection unavailable");
+      const error = rejected.reason as {
+        code?: unknown;
+        publicCode?: unknown;
+        statusCode?: unknown;
+      };
+      expect(error.code).not.toBe("40P01");
+      expect(["active_projects_reference_client", "client_not_active"]).toContain(error.publicCode);
+      expect(error.statusCode).toBe(409);
+    };
+    const assertInvariant = async (clientId: string) => {
+      const state = await db().query<{ archived: boolean; active_projects: string }>(
+        `SELECT client.archived_at IS NOT NULL AS archived,
+                count(project.id) FILTER (
+                  WHERE project.archived_at IS NULL AND project.status NOT IN ('completed', 'cancelled')
+                )::text AS active_projects
+         FROM app.clients client
+         LEFT JOIN app.projects project
+           ON project.organization_id = client.organization_id AND project.client_id = client.id
+         WHERE client.organization_id = $1 AND client.id = $2
+         GROUP BY client.organization_id, client.id`,
+        [organizationId, clientId],
+      );
+      const row = state.rows[0];
+      if (!row) throw new Error("client concurrency state unavailable");
+      expect(row.archived && Number(row.active_projects) > 0).toBe(false);
+    };
+
+    const createClient = await catalog.createClient(owner, "Concurrency Create Client");
+    const createResults = await runRowLockRace({
+      pool: db(),
+      schema: "app",
+      table: "clients",
+      organizationId,
+      rowId: createClient.id,
+      operations: [
+        () =>
+          planning.createProject(owner, {
+            name: "Concurrency Race Create Project",
+            kind: "billable",
+            status: "confirmed",
+            clientId: createClient.id,
+          }),
+        () => catalog.archiveClient(owner, createClient.id, createClient.rowVersion),
+      ],
+    });
+    assertSerialized(createResults);
+    await assertInvariant(createClient.id);
+
+    const updateClient = await catalog.createClient(owner, "Concurrency Update Client");
+    const updateProject = await planning.createProject(owner, {
+      name: "Update Base Project",
+      kind: "billable",
+      status: "draft",
+    });
+    const updateResults = await runRowLockRace({
+      pool: db(),
+      schema: "app",
+      table: "clients",
+      organizationId,
+      rowId: updateClient.id,
+      operations: [
+        () =>
+          planning.updateProject(owner, updateProject.id, {
+            name: "Concurrency Race Update Project",
+            kind: "billable",
+            status: "confirmed",
+            clientId: updateClient.id,
+            rowVersion: updateProject.rowVersion,
+          }),
+        () => catalog.archiveClient(owner, updateClient.id, updateClient.rowVersion),
+      ],
+    });
+    assertSerialized(updateResults);
+    await assertInvariant(updateClient.id);
+  });
+
   it("applies holidays and leave immediately with member-own and viewer-redacted access", async () => {
     const role = (await catalog.list(owner, "delivery_roles"))[0];
     const person = await planning.createPerson(
@@ -283,6 +345,93 @@ describe.skipIf(!enabled)("deferred V1 APIs PostgreSQL integration", () => {
       capacityMinutes: 360,
       confirmedMinutes: 300,
     });
+    await expect(
+      calendar.archiveHolidayCalendar(owner, holiday.id, holiday.rowVersion),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      publicCode: "holiday_calendar_assigned",
+    });
+    const whileAssigned = await planning.getSchedule(
+      owner,
+      "2030-01-08",
+      "2030-01-08",
+      "confirmed",
+    );
+    expect(
+      whileAssigned.people.find((entry) => entry.personId === person.id)?.days[0],
+    ).toMatchObject({
+      capacityMinutes: 0,
+      confirmedOverbookMinutes: 300,
+    });
+    await expect(
+      calendar.unassignHolidayCalendar(context(ownerUserId, "planner"), person.id),
+    ).rejects.toMatchObject({ statusCode: 403 });
+    await calendar.unassignHolidayCalendar(owner, person.id);
+    await calendar.archiveHolidayCalendar(owner, holiday.id, holiday.rowVersion);
+    const afterArchive = await planning.getSchedule(owner, "2030-01-08", "2030-01-08", "confirmed");
+    expect(
+      afterArchive.people.find((entry) => entry.personId === person.id)?.days[0],
+    ).toMatchObject({
+      capacityMinutes: 480,
+      confirmedMinutes: 300,
+      confirmedOverbookMinutes: 0,
+    });
+    const preservedArchivedCalendar = await db().query<{ calendars: string; dates: string }>(
+      `SELECT
+         (SELECT count(*)::text FROM app.holiday_calendars WHERE organization_id = $1 AND id = $2) AS calendars,
+         (SELECT count(*)::text FROM app.holiday_dates WHERE organization_id = $1 AND calendar_id = $2) AS dates`,
+      [organizationId, holiday.id],
+    );
+    expect(preservedArchivedCalendar.rows[0]).toEqual({ calendars: "1", dates: "1" });
+
+    const archivedPerson = await planning.createPerson(
+      owner,
+      { name: "Archived Calendar Person", activeFrom: "2020-01-01", activeUntil: "2020-12-31" },
+      week,
+    );
+    const archivedPersonCalendar = await calendar.createHolidayCalendar(
+      owner,
+      "Archived Person Calendar",
+    );
+    await calendar.assignHolidayCalendar(owner, archivedPerson.id, archivedPersonCalendar.id);
+    await planning.archivePerson(owner, archivedPerson.id, archivedPerson.rowVersion);
+    await expect(
+      calendar.archiveHolidayCalendar(
+        owner,
+        archivedPersonCalendar.id,
+        archivedPersonCalendar.rowVersion,
+      ),
+    ).rejects.toMatchObject({ statusCode: 409, publicCode: "holiday_calendar_assigned" });
+    await calendar.unassignHolidayCalendar(owner, archivedPerson.id);
+    await calendar.archiveHolidayCalendar(
+      owner,
+      archivedPersonCalendar.id,
+      archivedPersonCalendar.rowVersion,
+    );
+
+    const noAssignmentPerson = await planning.createPerson(
+      owner,
+      { name: "No Calendar Assignment", activeFrom: "2030-01-07" },
+      week,
+    );
+    for (const personId of [noAssignmentPerson.id, randomUUID()]) {
+      await expect(calendar.unassignHolidayCalendar(owner, personId)).rejects.toMatchObject({
+        statusCode: 404,
+        publicCode: "holiday_calendar_assignment_not_found",
+      });
+    }
+    const crossOrganizationPerson = await planning.createPerson(
+      context(ownerUserId, "owner", secondOrganizationId),
+      { name: "Cross Organization Calendar Person", activeFrom: "2030-01-07" },
+      week,
+    );
+    await expect(
+      calendar.unassignHolidayCalendar(owner, crossOrganizationPerson.id),
+    ).rejects.toMatchObject({
+      statusCode: 404,
+      publicCode: "holiday_calendar_assignment_not_found",
+    });
+
     expect((await calendar.listLeave(member, "2030-01-01", "2030-01-31"))[0]).toHaveProperty(
       "leaveTypeId",
     );
@@ -368,12 +517,31 @@ describe.skipIf(!enabled)("deferred V1 APIs PostgreSQL integration", () => {
   });
 
   it("derives and acknowledges conflicts with stable source-sensitive fingerprints", async () => {
+    const person = await planning.createPerson(
+      owner,
+      { name: "Conflict Person", activeFrom: "2030-01-07" },
+      week,
+    );
+    const project = await planning.createProject(owner, {
+      name: "Conflict Project",
+      kind: "billable",
+      status: "confirmed",
+    });
+    await planning.createAllocation(owner, {
+      personId: person.id,
+      projectId: project.id,
+      startDate: "2030-01-08",
+      endDate: "2030-01-08",
+      mode: "minutes_per_day",
+      minutesPerDay: 600,
+      state: "confirmed",
+    });
     const conflicts = await derived.listConflicts(owner, {
       start: "2030-01-08",
       end: "2030-01-09",
       scenario: "confirmed_and_tentative",
     });
-    const conflict = conflicts[0];
+    const conflict = conflicts.find((candidate) => candidate.personId === person.id);
     if (!conflict) throw new Error("conflict unavailable");
     expect(conflict.source).toContain("exceeds effective capacity");
     await expect(derived.acknowledge(member, conflict.fingerprint)).rejects.toMatchObject({
@@ -387,7 +555,7 @@ describe.skipIf(!enabled)("deferred V1 APIs PostgreSQL integration", () => {
           end: "2030-01-09",
           scenario: "confirmed_and_tentative",
         })
-      )[0]?.acknowledged,
+      ).find((candidate) => candidate.fingerprint === conflict.fingerprint)?.acknowledged,
     ).toBe(true);
     await derived.unacknowledge(owner, conflict.fingerprint);
   });
@@ -411,8 +579,56 @@ describe.skipIf(!enabled)("deferred V1 APIs PostgreSQL integration", () => {
       roleId: role.id,
       tagIds: [tag.id],
     });
-    expect(results[0]).toMatchObject({ personId: person.id, minimumHeadroomMinutes: 420 });
+    expect(results[0]).toMatchObject({
+      personId: person.id,
+      minimumHeadroomMinutes: 420,
+      continuousAllocationSafe: true,
+    });
     expect(results[0]?.explanation).toContain("holidays");
+    expect(await planning.listAllocations(owner)).toHaveLength(before.length);
+  });
+
+  it("marks holiday and full-leave completion ranges unsafe without assigning work", async () => {
+    const holidayPerson = await planning.createPerson(
+      owner,
+      { name: "Holiday Finder Person", activeFrom: "2030-01-11" },
+      week,
+    );
+    const holidayCalendar = await calendar.createHolidayCalendar(owner, "Finder Holidays");
+    await calendar.addHolidayDate(owner, holidayCalendar.id, "2030-01-14", "Finder Holiday");
+    await calendar.assignHolidayCalendar(owner, holidayPerson.id, holidayCalendar.id);
+    const leavePerson = await planning.createPerson(
+      owner,
+      { name: "Leave Finder Person", activeFrom: "2030-01-11" },
+      week,
+    );
+    const leaveType = await calendar.createLeaveType(owner, "Finder Leave");
+    await calendar.createLeave(owner, {
+      personId: leavePerson.id,
+      leaveTypeId: leaveType.id,
+      startDate: "2030-01-14",
+      endDate: "2030-01-14",
+    });
+    const before = await planning.listAllocations(owner);
+
+    const results = await derived.earliestStart(viewer, {
+      notBefore: "2030-01-11",
+      workdayCount: 2,
+      dailyMinutes: 60,
+      scenario: "confirmed",
+      horizonDays: 14,
+    });
+
+    expect(results.find((result) => result.personId === holidayPerson.id)).toMatchObject({
+      start: "2030-01-11",
+      end: "2030-01-15",
+      continuousAllocationSafe: false,
+    });
+    expect(results.find((result) => result.personId === leavePerson.id)).toMatchObject({
+      start: "2030-01-11",
+      end: "2030-01-15",
+      continuousAllocationSafe: false,
+    });
     expect(await planning.listAllocations(owner)).toHaveLength(before.length);
   });
 
@@ -433,6 +649,12 @@ describe.skipIf(!enabled)("deferred V1 APIs PostgreSQL integration", () => {
     expect(forecast.weeks).toHaveLength(13);
     expect(forecast.weeks[0]?.weekStart).toBe("2030-01-06");
     expect(forecast.assumptions).toContain("Advisory");
+    expect(forecast.assumptions).toContain(
+      "Target gap is based on confirmed billable minutes only",
+    );
+    expect(forecast.assumptions).toContain(
+      "Potential utilization includes tentative and internal work",
+    );
     expect(forecast.weeks[0]).toHaveProperty("tentativeBillableMinutes");
     expect(forecast.weeks[0]).not.toHaveProperty("revenue");
   });

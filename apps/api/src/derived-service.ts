@@ -8,7 +8,6 @@ import {
   findEarliestStarts,
   formatLocalDate,
   isoWeekday,
-  parseLocalDate,
   plannerDateForInstant,
   type Scenario,
 } from "@agency-workload/domain";
@@ -16,6 +15,7 @@ import type { Pool, PoolClient } from "pg";
 import type { SessionContext } from "./auth-service.js";
 import { HttpError } from "./errors.js";
 import { loadPersonPlans, type PlanFilters } from "./planning-data.js";
+import { parsePlanningDate } from "./planning-validation.js";
 
 const acknowledgeRoles = ["owner", "admin", "planner"] as const;
 
@@ -45,8 +45,8 @@ export class DerivedService {
   ) {}
 
   async listConflicts(actor: SessionContext, filters: ConflictFilters) {
-    const start = parseLocalDate(filters.start);
-    const end = parseLocalDate(filters.end);
+    const start = parsePlanningDate(filters.start);
+    const end = parsePlanningDate(filters.end);
     if (end < start || end - start > 365) throw new HttpError(400, "invalid_date_range");
     const plans = await loadPersonPlans(
       this.pool,
@@ -57,6 +57,7 @@ export class DerivedService {
     );
     const conflicts = deriveConflicts(
       plans.flatMap((plan) => calculateRange(plan, start, end, filters.scenario)),
+      filters.scenario,
     );
     const acknowledgements = await this.pool.query<{
       fingerprint: string;
@@ -113,7 +114,7 @@ export class DerivedService {
   }
 
   async earliestStart(actor: SessionContext, request: EarliestRequest) {
-    const notBefore = parseLocalDate(request.notBefore);
+    const notBefore = parsePlanningDate(request.notBefore);
     if (
       !Number.isInteger(request.workdayCount) ||
       request.workdayCount < 1 ||
@@ -163,6 +164,7 @@ export class DerivedService {
         start: formatLocalDate(result.start),
         end: formatLocalDate(result.end),
         minimumHeadroomMinutes: Math.min(...headrooms),
+        continuousAllocationSafe: result.continuousAllocationSafe,
         explanation:
           "Completion includes only qualifying workdays; weekends, holidays, and leave extend the range, and gaps over seven days break a sequence.",
       };
@@ -175,7 +177,7 @@ export class DerivedService {
     if (!Number.isInteger(weeks) || weeks < 1 || weeks > 52)
       throw new HttpError(400, "invalid_forecast_range");
     const localToday = plannerDateForInstant(this.instant(), settings.timezone);
-    const requestedStart = parseLocalDate(filters.start ?? localToday);
+    const requestedStart = parsePlanningDate(filters.start ?? localToday);
     const offset = (isoWeekday(requestedStart) - settings.week_starts_on + 7) % 7;
     const start = addDays(requestedStart, -offset);
     const end = addDays(start, weeks * 7 - 1);
@@ -194,7 +196,7 @@ export class DerivedService {
       timezone: settings.timezone,
       weekStartsOn: settings.week_starts_on,
       assumptions:
-        "Advisory forecast from current effective schedules, holidays, leave, and confirmed/tentative allocations. No financial projection or automatic staffing.",
+        "Advisory forecast from current effective schedules, holidays, leave, and confirmed/tentative allocations. Target gap is based on confirmed billable minutes only. Potential utilization includes tentative and internal work. No financial projection or automatic staffing.",
       weeks: Array.from({ length: weeks }, (_, index) => {
         const weekStart = addDays(start, index * 7);
         const weekEnd = addDays(weekStart, 6);

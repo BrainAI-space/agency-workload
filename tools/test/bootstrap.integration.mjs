@@ -11,10 +11,28 @@ if (!process.argv.includes("--integration")) {
 const root = fileURLToPath(new URL("../..", import.meta.url));
 await bootstrapLocal({ root });
 
+const migration = spawnSync(
+  process.execPath,
+  ["--env-file=.env", "--import", "tsx", "packages/db/src/cli.ts"],
+  {
+    cwd: root,
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+    windowsHide: true,
+  },
+);
+if (migration.error || migration.status !== 0) {
+  console.error("Bootstrap integration migration failed without exposing subprocess output.");
+  process.exit(1);
+}
+
+await bootstrapLocal({ root });
+
 const verificationSql = String.raw`
 \set ON_ERROR_STOP on
 DO $verify$
 DECLARE
+  privilege_name text;
   role_name text;
 BEGIN
   IF NOT EXISTS (
@@ -104,6 +122,41 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'PUBLIC database privilege verification failed';
   END IF;
+
+  IF to_regclass('app.schema_migrations') IS NULL THEN
+    RAISE EXCEPTION 'migration metadata table verification failed';
+  END IF;
+  FOREACH role_name IN ARRAY ARRAY[
+    'agency_workload_runtime',
+    'agency_workload_backup'
+  ] LOOP
+    FOREACH privilege_name IN ARRAY ARRAY[
+      'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'
+    ] LOOP
+      IF has_table_privilege(role_name, 'app.schema_migrations', privilege_name) THEN
+        RAISE EXCEPTION 'migration metadata privilege verification failed for % %',
+          role_name, privilege_name;
+      END IF;
+    END LOOP;
+  END LOOP;
+
+  IF NOT has_table_privilege('agency_workload_runtime', 'app.organizations', 'SELECT')
+      OR NOT has_table_privilege('agency_workload_runtime', 'app.organizations', 'INSERT')
+      OR NOT has_table_privilege('agency_workload_runtime', 'app.organizations', 'UPDATE')
+      OR NOT has_table_privilege('agency_workload_runtime', 'app.organizations', 'DELETE')
+      OR NOT has_table_privilege('agency_workload_backup', 'app.organizations', 'SELECT')
+      OR has_table_privilege('agency_workload_backup', 'app.organizations', 'INSERT')
+      OR has_table_privilege('agency_workload_backup', 'app.organizations', 'UPDATE')
+      OR has_table_privilege('agency_workload_backup', 'app.organizations', 'DELETE') THEN
+    RAISE EXCEPTION 'normal application table privilege verification failed';
+  END IF;
+
+  IF NOT has_table_privilege('agency_workload_runtime', 'app.audit_events', 'SELECT')
+      OR NOT has_table_privilege('agency_workload_runtime', 'app.audit_events', 'INSERT')
+      OR has_table_privilege('agency_workload_runtime', 'app.audit_events', 'UPDATE')
+      OR has_table_privilege('agency_workload_runtime', 'app.audit_events', 'DELETE') THEN
+    RAISE EXCEPTION 'append-only audit privilege verification failed';
+  END IF;
 END
 $verify$;
 `;
@@ -133,5 +186,5 @@ if (result.error || result.status !== 0) {
 }
 
 console.log(
-  "Verified the database, five dedicated roles, locked compatibility role, ownership, and privileges.",
+  "Verified bootstrap before migration and after migration without metadata or audit ACL regression.",
 );

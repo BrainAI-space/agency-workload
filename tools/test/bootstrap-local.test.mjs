@@ -331,6 +331,14 @@ test("bootstrap SQL is idempotent, least-privilege, and contains no destructive 
   assert.match(databaseSql, /CREATE SCHEMA IF NOT EXISTS auth/);
   assert.match(databaseSql, /REVOKE ALL ON SCHEMA public FROM PUBLIC/);
   assert.match(databaseSql, /GRANT USAGE ON SCHEMA app TO agency_workload_runtime/);
+  assert.match(
+    databaseSql,
+    /GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA app TO agency_workload_runtime;\s+GRANT SELECT ON ALL TABLES IN SCHEMA app, auth TO agency_workload_backup;\s+DO \$bootstrap\$\s+BEGIN\s+IF to_regclass\('app\.schema_migrations'\) IS NOT NULL THEN\s+EXECUTE 'REVOKE ALL ON TABLE app\.schema_migrations FROM agency_workload_runtime, agency_workload_backup';/s,
+  );
+  assert.match(
+    databaseSql,
+    /IF to_regclass\('app\.audit_events'\) IS NOT NULL THEN\s+EXECUTE 'REVOKE UPDATE, DELETE ON TABLE app\.audit_events FROM agency_workload_runtime';/s,
+  );
   assert.match(databaseSql, /ALTER DEFAULT PRIVILEGES FOR ROLE agency_workload_owner/);
   assert.match(databaseSql, /ALTER DEFAULT PRIVILEGES FOR ROLE supabase_auth_admin/);
   assert.doesNotMatch(allSql, /DROP\s+(?:DATABASE|SCHEMA|TABLE)|TRUNCATE|DELETE\s+FROM/i);

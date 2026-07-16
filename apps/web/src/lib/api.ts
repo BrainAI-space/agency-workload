@@ -172,6 +172,7 @@ export interface EarliestStartResult {
   start: string;
   end: string;
   minimumHeadroomMinutes: number;
+  continuousAllocationSafe: boolean;
   explanation: string;
 }
 
@@ -328,6 +329,11 @@ export const api = {
       body,
       csrfToken,
     }),
+  unassignHolidayCalendar: (personId: string, csrfToken: string) =>
+    request<{ ok: true }>(`/api/v1/people/${encodeURIComponent(personId)}/holiday-calendar`, {
+      method: "DELETE",
+      csrfToken,
+    }),
   listProjects: (signal?: AbortSignal) => request<Project[]>("/api/v1/projects", { signal }),
   createProject: (
     body: {
@@ -412,8 +418,14 @@ export const api = {
       tags?: string[];
     },
     csrfToken: string,
+    signal?: AbortSignal,
   ) =>
-    request<EarliestStartResult[]>("/api/v1/earliest-start", { method: "POST", body, csrfToken }),
+    request<EarliestStartResult[]>("/api/v1/earliest-start", {
+      method: "POST",
+      body,
+      csrfToken,
+      signal,
+    }),
   listConflicts: (start: string, end: string, scenario: Scenario, signal?: AbortSignal) =>
     request<DerivedConflict[]>(query("/api/v1/conflicts", { start, end, scenario }), { signal }),
   acknowledgeConflict: (fingerprint: string, csrfToken: string) =>

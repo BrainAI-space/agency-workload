@@ -9,12 +9,16 @@ import {
   parseLocalDate,
   plannerDateForInstant,
   type Scenario,
-  validateIanaTimezone,
   type WorkScheduleVersion,
 } from "@agency-workload/domain";
 import type { Pool, PoolClient } from "pg";
 import type { SessionContext } from "./auth-service.js";
 import { HttpError } from "./errors.js";
+import {
+  parsePlanningDate,
+  validatePlanningRange,
+  validatePlanningTimezone,
+} from "./planning-validation.js";
 
 const manageRoles: readonly AppRole[] = ["owner", "admin", "planner"];
 
@@ -77,10 +81,7 @@ interface PersonResult {
 type ProjectedPerson = Omit<PersonResult, "email"> & { email?: string | null };
 
 function validateRange(start: string, end?: string | null): void {
-  const startOrdinal = parseLocalDate(start);
-  if (end !== undefined && end !== null && parseLocalDate(end) < startOrdinal) {
-    throw new HttpError(400, "invalid_date_range");
-  }
+  validatePlanningRange(start, end);
 }
 
 function validateProjectDates(input: ProjectInput): void {
@@ -148,8 +149,17 @@ export class PlanningService {
     },
   ) {
     this.requireManage(actor);
-    validateIanaTimezone(input.timezone);
+    validatePlanningTimezone(input.timezone);
+    if (input.forecastHorizonWeeks < 13 || input.forecastHorizonWeeks > 52) {
+      throw new HttpError(400, "invalid_forecast_horizon");
+    }
     return this.transaction(async (client) => {
+      await client.query(
+        `SELECT pg_advisory_xact_lock(
+           hashtext('organization_planning_settings'), hashtext($1::text)
+         )`,
+        [actor.organizationId],
+      );
       const existing = await client.query<{ row_version: number }>(
         `SELECT row_version FROM app.organization_planning_settings
          WHERE organization_id = $1 FOR UPDATE`,
@@ -342,17 +352,33 @@ export class PlanningService {
           personId,
           "person_not_found",
         );
-      await this.audit(client, actor, "person.updated", "person", personId);
       if (input.tagIds !== undefined) {
         await this.replacePersonTags(client, actor.organizationId, personId, input.tagIds);
       }
-      return result.rows[0];
+      await this.audit(client, actor, "person.updated", "person", personId);
+      return this.getPersonWithClient(client, actor.organizationId, personId);
     });
   }
 
   async archivePerson(actor: SessionContext, personId: string, rowVersion: number): Promise<void> {
     this.requireManage(actor);
     await this.transaction(async (client) => {
+      const target = await client.query<{ row_version: number }>(
+        `SELECT row_version FROM app.people
+         WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL FOR UPDATE`,
+        [actor.organizationId, personId],
+      );
+      const person = target.rows[0];
+      if (!person) {
+        return this.throwMissingOrStale(
+          client,
+          "people",
+          actor.organizationId,
+          personId,
+          "person_not_found",
+        );
+      }
+      if (person.row_version !== rowVersion) throw new HttpError(409, "stale_write");
       const future = await client.query(
         `SELECT 1 FROM app.allocations
          WHERE organization_id = $1 AND person_id = $2 AND deleted_at IS NULL AND end_date >= $3 LIMIT 1`,
@@ -363,19 +389,11 @@ export class PlanningService {
         ],
       );
       if (future.rowCount) throw new HttpError(409, "future_allocations_exist");
-      const result = await client.query(
+      await client.query(
         `UPDATE app.people SET archived_at = now(), row_version = row_version + 1, updated_at = now()
-         WHERE organization_id = $1 AND id = $2 AND row_version = $3 AND archived_at IS NULL RETURNING id`,
-        [actor.organizationId, personId, rowVersion],
+         WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL`,
+        [actor.organizationId, personId],
       );
-      if (!result.rowCount)
-        await this.throwMissingOrStale(
-          client,
-          "people",
-          actor.organizationId,
-          personId,
-          "person_not_found",
-        );
       await this.audit(client, actor, "person.archived", "person", personId);
     });
   }
@@ -433,6 +451,7 @@ export class PlanningService {
     this.requireManage(actor);
     validateProjectDates(input);
     return this.transaction(async (client) => {
+      await this.requireProjectClient(client, actor.organizationId, input.clientId ?? null);
       const id = randomUUID();
       const result = await client.query(
         `INSERT INTO app.projects
@@ -465,6 +484,26 @@ export class PlanningService {
     this.requireManage(actor);
     validateProjectDates(input);
     return this.transaction(async (client) => {
+      const target = await client.query<{ row_version: number; status: string }>(
+        `SELECT row_version, status FROM app.projects
+         WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL FOR UPDATE`,
+        [actor.organizationId, projectId],
+      );
+      const project = target.rows[0];
+      if (!project) {
+        return this.throwMissingOrStale(
+          client,
+          "projects",
+          actor.organizationId,
+          projectId,
+          "project_not_found",
+        );
+      }
+      if (["completed", "cancelled"].includes(project.status)) {
+        throw new HttpError(409, "invalid_project_transition");
+      }
+      if (project.row_version !== input.rowVersion) throw new HttpError(409, "stale_write");
+      await this.requireProjectClient(client, actor.organizationId, input.clientId ?? null);
       const result = await client.query(
         `UPDATE app.projects
          SET client_id = $1, name = $2, kind = $3, status = $4,
@@ -485,14 +524,7 @@ export class PlanningService {
           input.rowVersion,
         ],
       );
-      if (!result.rows[0])
-        await this.throwMissingOrStale(
-          client,
-          "projects",
-          actor.organizationId,
-          projectId,
-          "project_not_found",
-        );
+      if (!result.rows[0]) throw new HttpError(409, "stale_write");
       await this.audit(client, actor, "project.updated", "project", projectId);
       return result.rows[0];
     });
@@ -517,6 +549,8 @@ export class PlanningService {
   }
 
   async listAllocations(actor: SessionContext, start?: string, end?: string) {
+    if (start) parsePlanningDate(start);
+    if (end) parsePlanningDate(end);
     if (start && end) validateRange(start, end);
     return (
       await this.pool.query(
@@ -543,8 +577,9 @@ export class PlanningService {
     validateRange(input.startDate, input.endDate);
     this.validateAllocationMode(input);
     return this.transaction(async (client) => {
-      await this.requirePerson(client, actor.organizationId, input.personId);
-      await this.requireProject(client, actor.organizationId, input.projectId);
+      // Allocation parent locks are always acquired person first, then project.
+      await this.requirePerson(client, actor.organizationId, input.personId, true);
+      await this.requireProject(client, actor.organizationId, input.projectId, true);
       const id = randomUUID();
       const result = await client.query(
         `INSERT INTO app.allocations
@@ -582,8 +617,9 @@ export class PlanningService {
     validateRange(input.startDate, input.endDate);
     this.validateAllocationMode(input);
     return this.transaction(async (client) => {
-      await this.requirePerson(client, actor.organizationId, input.personId);
-      await this.requireProject(client, actor.organizationId, input.projectId);
+      // Allocation parent locks are always acquired person first, then project.
+      await this.requirePerson(client, actor.organizationId, input.personId, true);
+      await this.requireProject(client, actor.organizationId, input.projectId, true);
       const result = await client.query(
         `UPDATE app.allocations
          SET person_id = $1, project_id = $2, start_date = $3, end_date = $4,
@@ -650,8 +686,8 @@ export class PlanningService {
 
   async getSchedule(actor: SessionContext, start: string, end: string, scenario: Scenario) {
     validateRange(start, end);
-    const startOrdinal = parseLocalDate(start);
-    const endOrdinal = parseLocalDate(end);
+    const startOrdinal = parsePlanningDate(start);
+    const endOrdinal = parsePlanningDate(end);
     if (endOrdinal - startOrdinal > 365) throw new HttpError(400, "date_range_too_large");
     const organizationId = actor.organizationId;
     const [people, scheduleRows, holidayRows, leaveRows, allocationRows] = await Promise.all([
@@ -691,9 +727,13 @@ export class PlanningService {
       this.pool.query<{ person_id: string; holiday_date: string }>(
         `SELECT assignment.person_id, holiday.holiday_date::text
          FROM app.person_holiday_calendars assignment
+         JOIN app.holiday_calendars calendar
+           ON calendar.organization_id = assignment.organization_id
+          AND calendar.id = assignment.calendar_id
          JOIN app.holiday_dates holiday
            ON holiday.organization_id = assignment.organization_id AND holiday.calendar_id = assignment.calendar_id
-         WHERE assignment.organization_id = $1 AND holiday.holiday_date BETWEEN $2::date AND $3::date`,
+         WHERE assignment.organization_id = $1 AND calendar.archived_at IS NULL
+           AND holiday.holiday_date BETWEEN $2::date AND $3::date`,
         [organizationId, start, end],
       ),
       this.pool.query<{
@@ -780,7 +820,7 @@ export class PlanningService {
           .filter((day) => day.personId === plan.id)
           .map((day) => ({ ...day, date: formatLocalDate(day.date) })),
       })),
-      conflicts: deriveConflicts(days).map((conflict) => ({
+      conflicts: deriveConflicts(days, scenario).map((conflict) => ({
         ...conflict,
         date: formatLocalDate(conflict.date),
       })),
@@ -830,6 +870,28 @@ export class PlanningService {
     transition: "archive" | "complete",
   ): Promise<void> {
     await this.transaction(async (client) => {
+      const target = await client.query<{ row_version: number; status: string }>(
+        `SELECT row_version, status FROM app.projects
+         WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL FOR UPDATE`,
+        [actor.organizationId, projectId],
+      );
+      const project = target.rows[0];
+      if (!project) {
+        return this.throwMissingOrStale(
+          client,
+          "projects",
+          actor.organizationId,
+          projectId,
+          "project_not_found",
+        );
+      }
+      if (
+        transition === "complete" &&
+        !["draft", "tentative", "confirmed"].includes(project.status)
+      ) {
+        throw new HttpError(409, "invalid_project_transition");
+      }
+      if (project.row_version !== rowVersion) throw new HttpError(409, "stale_write");
       const future = await client.query(
         `SELECT 1 FROM app.allocations
          WHERE organization_id = $1 AND project_id = $2 AND deleted_at IS NULL AND end_date >= $3 LIMIT 1`,
@@ -844,19 +906,11 @@ export class PlanningService {
         transition === "archive"
           ? "archived_at = now(), row_version = row_version + 1, updated_at = now()"
           : "status = 'completed', completed_at = now(), row_version = row_version + 1, updated_at = now()";
-      const result = await client.query(
+      await client.query(
         `UPDATE app.projects SET ${setClause}
-         WHERE organization_id = $1 AND id = $2 AND row_version = $3 AND archived_at IS NULL RETURNING id`,
-        [actor.organizationId, projectId, rowVersion],
+         WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL`,
+        [actor.organizationId, projectId],
       );
-      if (!result.rowCount)
-        await this.throwMissingOrStale(
-          client,
-          "projects",
-          actor.organizationId,
-          projectId,
-          "project_not_found",
-        );
       await this.audit(client, actor, `project.${transition}d`, "project", projectId);
     });
   }
@@ -906,9 +960,11 @@ export class PlanningService {
     client: PoolClient,
     organizationId: string,
     personId: string,
+    lock = false,
   ): Promise<void> {
     const result = await client.query(
-      `SELECT 1 FROM app.people WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL`,
+      `SELECT 1 FROM app.people
+       WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL${lock ? " FOR UPDATE" : ""}`,
       [organizationId, personId],
     );
     if (!result.rowCount) throw new HttpError(404, "person_not_found");
@@ -918,9 +974,11 @@ export class PlanningService {
     client: PoolClient,
     organizationId: string,
     projectId: string,
+    lock = false,
   ): Promise<void> {
     const result = await client.query<{ status: string; archived_at: Date | null }>(
-      `SELECT status, archived_at FROM app.projects WHERE organization_id = $1 AND id = $2`,
+      `SELECT status, archived_at FROM app.projects
+       WHERE organization_id = $1 AND id = $2${lock ? " FOR UPDATE" : ""}`,
       [organizationId, projectId],
     );
     const project = result.rows[0];
@@ -928,6 +986,22 @@ export class PlanningService {
     if (project.archived_at || ["completed", "cancelled"].includes(project.status)) {
       throw new HttpError(409, "project_not_allocatable");
     }
+  }
+
+  private async requireProjectClient(
+    client: PoolClient,
+    organizationId: string,
+    clientId: string | null,
+  ): Promise<void> {
+    if (!clientId) return;
+    const result = await client.query<{ archived_at: Date | null }>(
+      `SELECT archived_at FROM app.clients
+       WHERE organization_id = $1 AND id = $2 FOR UPDATE`,
+      [organizationId, clientId],
+    );
+    const projectClient = result.rows[0];
+    if (!projectClient) throw new HttpError(404, "client_not_found");
+    if (projectClient.archived_at) throw new HttpError(409, "client_not_active");
   }
 
   private async requireAssignableCatalogs(

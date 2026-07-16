@@ -73,7 +73,9 @@ HTTP. It uses `BOOTSTRAP_EMAIL` only when no active owner exists.
 
 Rollback is break-glass only. Development requires
 `npm run db:migrate -- --down --confirm-down`. Production additionally requires
-`--break-glass-production`.
+`--break-glass-production`. Installations last migrated before
+`0009_down_migration_checksums` must first run the normal forward `npm run db:migrate` so the runner
+can bind reviewed down SQL. Rollback otherwise fails closed before executing SQL.
 
 ## Production Mail Boundary
 

@@ -79,9 +79,13 @@ export async function loadPersonPlans(
     pool.query<{ person_id: string; holiday_date: string }>(
       `SELECT assignment.person_id, holiday.holiday_date::text
        FROM app.person_holiday_calendars assignment
+       JOIN app.holiday_calendars calendar
+         ON calendar.organization_id = assignment.organization_id
+        AND calendar.id = assignment.calendar_id
        JOIN app.holiday_dates holiday
          ON holiday.organization_id = assignment.organization_id AND holiday.calendar_id = assignment.calendar_id
        WHERE assignment.organization_id = $1 AND assignment.person_id = ANY($2::uuid[])
+         AND calendar.archived_at IS NULL
          AND holiday.holiday_date BETWEEN $3::date AND $4::date`,
       [organizationId, personIds, start, end],
     ),

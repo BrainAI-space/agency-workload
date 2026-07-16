@@ -298,8 +298,18 @@ GRANT USAGE ON SCHEMA app TO ${roleNames.runtime}, ${roleNames.backup};
 GRANT USAGE, CREATE ON SCHEMA auth TO ${roleNames.auth};
 GRANT USAGE ON SCHEMA auth TO ${roleNames.backup};
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA app TO ${roleNames.runtime};
-GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA app TO ${roleNames.runtime};
 GRANT SELECT ON ALL TABLES IN SCHEMA app, auth TO ${roleNames.backup};
+DO $bootstrap$
+BEGIN
+  IF to_regclass('app.schema_migrations') IS NOT NULL THEN
+    EXECUTE 'REVOKE ALL ON TABLE app.schema_migrations FROM ${roleNames.runtime}, ${roleNames.backup}';
+  END IF;
+  IF to_regclass('app.audit_events') IS NOT NULL THEN
+    EXECUTE 'REVOKE UPDATE, DELETE ON TABLE app.audit_events FROM ${roleNames.runtime}';
+  END IF;
+END
+$bootstrap$;
+GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA app TO ${roleNames.runtime};
 GRANT SELECT ON ALL SEQUENCES IN SCHEMA app, auth TO ${roleNames.backup};
 ALTER DEFAULT PRIVILEGES FOR ROLE ${roleNames.owner} IN SCHEMA app
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${roleNames.runtime};

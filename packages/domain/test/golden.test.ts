@@ -220,6 +220,36 @@ describe("22 supplied-rule golden calculation cases", () => {
     expect(deriveConflicts(days)[0]?.fingerprint).toBe(deriveConflicts(days)[0]?.fingerprint);
     expect(deriveConflicts(days)[0]).toMatchObject({ severity: "confirmed", overbookMinutes: 120 });
   });
+  it("19b excludes tentative-only conflicts from confirmed scenarios", () => {
+    const day = calculateDay(
+      person({ allocations: [allocation({ state: "tentative", minutesPerDay: 600 })] }),
+      monday,
+      "confirmed",
+    );
+    expect(day.potentialOverbookMinutes).toBe(120);
+    expect(deriveConflicts([day], "confirmed")).toEqual([]);
+    expect(deriveConflicts([day], "confirmed_and_tentative")[0]).toMatchObject({
+      severity: "potential",
+      overbookMinutes: 120,
+    });
+  });
+  it("19c keeps confirmed conflict fingerprints invariant to tentative demand", () => {
+    const withTentative = (tentativeMinutes: number) =>
+      calculateDay(
+        person({
+          allocations: [
+            allocation({ id: "confirmed", minutesPerDay: 600 }),
+            allocation({ id: "tentative", state: "tentative", minutesPerDay: tentativeMinutes }),
+          ],
+        }),
+        monday,
+      );
+    const first = deriveConflicts([withTentative(60)], "confirmed_and_tentative")[0];
+    const second = deriveConflicts([withTentative(300)], "confirmed_and_tentative")[0];
+    expect(first).toMatchObject({ severity: "confirmed", overbookMinutes: 120 });
+    expect(second).toMatchObject({ severity: "confirmed", overbookMinutes: 120 });
+    expect(first?.fingerprint).toBe(second?.fingerprint);
+  });
   it("20 finds the earliest filtered person", () => {
     const result = findEarliestStarts([person(), person({ id: "wrong", roleId: "designer" })], {
       notBefore: monday,
@@ -231,9 +261,39 @@ describe("22 supplied-rule golden calculation cases", () => {
       teamId: "delivery",
       tags: ["typescript"],
     });
-    expect(result).toEqual([{ personId: "person-a", start: monday, end: addDays(monday, 1) }]);
+    expect(result).toEqual([
+      {
+        personId: "person-a",
+        start: monday,
+        end: addDays(monday, 1),
+        continuousAllocationSafe: true,
+      },
+    ]);
   });
-  it("21 extends earliest completion across weekends and holidays", () => {
+  it("21 keeps a continuous fixed allocation safe across baseline-zero weekends", () => {
+    const friday = parseLocalDate("2030-01-11");
+    const result = findEarliestStarts(
+      [
+        person({
+          activeFrom: friday,
+          schedules: [{ effectiveFrom: friday, weekdayMinutes: weekdays() }],
+        }),
+      ],
+      {
+        notBefore: friday,
+        workdayCount: 2,
+        dailyLoadMinutes: 60,
+        scenario: "confirmed",
+        horizonDays: 14,
+      },
+    );
+    expect(result[0]).toMatchObject({
+      start: friday,
+      end: addDays(friday, 3),
+      continuousAllocationSafe: true,
+    });
+  });
+  it("21b marks a continuous fixed allocation unsafe across a scheduled holiday", () => {
     const friday = parseLocalDate("2030-01-11");
     const mondayAfter = addDays(friday, 3);
     const plan = person({
@@ -251,6 +311,32 @@ describe("22 supplied-rule golden calculation cases", () => {
     const match = result[0];
     if (!match) throw new Error("earliest-start match unavailable");
     expect(formatLocalDate(match.end)).toBe("2030-01-15");
+    expect(match.continuousAllocationSafe).toBe(false);
+  });
+  it("21c marks a continuous fixed allocation unsafe across full-day leave", () => {
+    const friday = parseLocalDate("2030-01-11");
+    const mondayAfter = addDays(friday, 3);
+    const result = findEarliestStarts(
+      [
+        person({
+          activeFrom: friday,
+          schedules: [{ effectiveFrom: friday, weekdayMinutes: weekdays() }],
+          leave: [{ start: mondayAfter, end: mondayAfter }],
+        }),
+      ],
+      {
+        notBefore: friday,
+        workdayCount: 2,
+        dailyLoadMinutes: 60,
+        scenario: "confirmed",
+        horizonDays: 14,
+      },
+    );
+    expect(result[0]).toMatchObject({
+      start: friday,
+      end: addDays(friday, 4),
+      continuousAllocationSafe: false,
+    });
   });
   it("22 breaks a sequence after a gap longer than seven days and respects tentative scenario", () => {
     const plan = person({

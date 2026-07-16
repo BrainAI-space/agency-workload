@@ -38,12 +38,22 @@ and respect reduced-motion preferences.
 
 ## Browser Verification
 
-Run `npm run test:browser:smoke` from the repository root. The wrapper requires ports `4100` and
-`3100` to be free, starts Fastify and Vite with the repository as their working directory, verifies
-HTTP readiness, runs the Mailpit OTP smoke, and terminates each full process tree on Windows.
+Run `npm run test:browser:smoke` from the repository root. The wrapper selects six random free host
+ports and starts a disposable PostgreSQL, GoTrue, and Mailpit stack plus Fastify and a production Vite
+preview. It does not use the persistent local application database, GoTrue, or Mailpit services.
+
+Docker must resolve through the effective local context: a Windows `npipe://` endpoint or POSIX
+`unix://` socket. The runner rejects `DOCKER_HOST` and `DOCKER_CONTEXT` overrides and any TCP, SSH,
+HTTP(S), or malformed endpoint before creating a container, network, or volume. Compose receives only
+the generated in-memory smoke configuration and runs with repository `.env` auto-loading disabled.
 
 The root `dev:web` script launches Vite with an explicit `apps/web` root, so `npm --prefix ...` works
-from external tool directories and forwards `--host` directly to Vite. On smoke failure, the runner
-clears form values and redacts email/code-like page text before writing an ignored screenshot and
-structured summary under `test-results/browser-smoke/`. The summary contains paths, statuses,
-headings, labels, and error categories only.
+from external tool directories and forwards `--host` directly to Vite. Browser, API, and web run as
+managed process trees/groups. A shared shutdown controller aborts startup/readiness, waits for the main
+run to settle, then stops and rescans the live process registry before and after
+`docker compose down -v --remove-orphans`. Repeated signals cannot bypass that cleanup.
+
+On browser failure, inputs and dynamic text are removed before an ignored screenshot and JSON summary
+are written under `test-results/browser-smoke/`. The summary contains only fixed stage, readiness,
+page, heading, label, browser, and bounded network categories. It excludes raw paths, URLs, query
+strings, response bodies, errors, names, emails, OTPs, UUIDs, and user input.

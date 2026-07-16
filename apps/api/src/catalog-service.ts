@@ -152,6 +152,14 @@ export class CatalogService {
   async archiveClient(actor: SessionContext, id: string, rowVersion: number): Promise<void> {
     this.requireRole(actor, planningRoles);
     await this.transaction(async (client) => {
+      const target = await client.query<{ row_version: number }>(
+        `SELECT row_version FROM app.clients
+         WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL FOR UPDATE`,
+        [actor.organizationId, id],
+      );
+      const current = target.rows[0];
+      if (!current) return this.missingOrStale(client, "clients", actor.organizationId, id);
+      if (current.row_version !== rowVersion) throw new HttpError(409, "stale_write");
       const activeProject = await client.query(
         `SELECT 1 FROM app.projects
          WHERE organization_id = $1 AND client_id = $2 AND archived_at IS NULL
@@ -159,12 +167,11 @@ export class CatalogService {
         [actor.organizationId, id],
       );
       if (activeProject.rowCount) throw new HttpError(409, "active_projects_reference_client");
-      const result = await client.query(
+      await client.query(
         `UPDATE app.clients SET archived_at = now(), row_version = row_version + 1
-         WHERE organization_id = $1 AND id = $2 AND row_version = $3 AND archived_at IS NULL RETURNING id`,
-        [actor.organizationId, id, rowVersion],
+         WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL`,
+        [actor.organizationId, id],
       );
-      if (!result.rowCount) await this.missingOrStale(client, "clients", actor.organizationId, id);
       await this.audit(client, actor, "client.archived", "client", id);
     });
   }

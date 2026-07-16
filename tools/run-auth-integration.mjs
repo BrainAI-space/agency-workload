@@ -1,13 +1,9 @@
-import { spawnSync } from "node:child_process";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { runDisposableAuthIntegration } from "./lib/disposable-auth-integration.mjs";
 
-const result = spawnSync(
-  process.execPath,
-  ["node_modules/vitest/vitest.mjs", "run", "apps/api/test/auth.integration.test.ts"],
-  {
-    encoding: "utf8",
-    env: { ...process.env, AW_AUTH_INTEGRATION: "1" },
-    stdio: "inherit",
-    windowsHide: true,
-  },
-);
-process.exitCode = result.status ?? 1;
+const root = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
+await runDisposableAuthIntegration({
+  root,
+  testFile: join("apps", "api", "test", "auth.integration.test.ts"),
+});

@@ -235,12 +235,15 @@ function fingerprint(input: string): string {
   return `${first.toString(16).padStart(8, "0")}${second.toString(16).padStart(8, "0")}`;
 }
 
-export function deriveConflicts(days: readonly DailyCapacity[]): CapacityConflict[] {
+export function deriveConflicts(
+  days: readonly DailyCapacity[],
+  scenario: Scenario = "confirmed_and_tentative",
+): CapacityConflict[] {
   return days.flatMap((day) => {
     const severity =
       day.confirmedOverbookMinutes > 0
         ? "confirmed"
-        : day.potentialOverbookMinutes > 0
+        : scenario === "confirmed_and_tentative" && day.potentialOverbookMinutes > 0
           ? "potential"
           : null;
     if (!severity) return [];
@@ -253,7 +256,7 @@ export function deriveConflicts(days: readonly DailyCapacity[]): CapacityConflic
         severity,
         overbookMinutes,
         fingerprint: fingerprint(
-          `${day.personId}|${day.date}|${severity}|${day.capacityMinutes}|${day.confirmedMinutes}|${day.tentativeMinutes}`,
+          `${day.personId}|${day.date}|${severity}|${day.capacityMinutes}|${day.confirmedMinutes}|${severity === "potential" ? day.tentativeMinutes : 0}`,
         ),
       },
     ];
@@ -264,6 +267,34 @@ function matches(person: PersonPlan, request: EarliestStartRequest): boolean {
   if (request.roleId && person.roleId !== request.roleId) return false;
   if (request.teamId && person.teamId !== request.teamId) return false;
   return (request.tags ?? []).every((tag) => person.tags.includes(tag));
+}
+
+function scenarioAvailability(day: DailyCapacity, scenario: Scenario): number {
+  return scenario === "confirmed" ? day.availableConfirmedMinutes : day.availableScenarioMinutes;
+}
+
+export function isContinuousFixedAllocationSafe(
+  person: PersonPlan,
+  start: DateOrdinal,
+  end: DateOrdinal,
+  scenario: Scenario,
+  dailyLoadMinutes: number,
+): boolean {
+  const allocation: Allocation = {
+    id: "continuous-allocation-safety-check",
+    projectId: "continuous-allocation-safety-check",
+    start,
+    end,
+    mode: "minutes_per_day",
+    minutesPerDay: dailyLoadMinutes,
+    state: "confirmed",
+    kind: "billable",
+  };
+  return eachDate(start, end).every((date) => {
+    const day = calculateDay(person, date, scenario);
+    const additionalDemand = allocationMinutes(allocation, day.scheduledMinutes);
+    return additionalDemand <= scenarioAvailability(day, scenario);
+  });
 }
 
 export function findEarliestStarts(
@@ -294,16 +325,26 @@ export function findEarliestStarts(
         let last: DateOrdinal | null = null;
         for (let date = candidate; date <= horizonEnd; date = addDays(date, 1)) {
           const day = calculateDay(person, date, request.scenario);
-          const available =
-            request.scenario === "confirmed"
-              ? day.availableConfirmedMinutes
-              : day.availableScenarioMinutes;
+          const available = scenarioAvailability(day, request.scenario);
           if (day.capacityMinutes > 0 && available >= request.dailyLoadMinutes) {
             first ??= date;
             last = date;
             count += 1;
             if (count === request.workdayCount && first !== null && last !== null) {
-              return [{ personId: person.id, start: first, end: last }];
+              return [
+                {
+                  personId: person.id,
+                  start: first,
+                  end: last,
+                  continuousAllocationSafe: isContinuousFixedAllocationSafe(
+                    person,
+                    first,
+                    last,
+                    request.scenario,
+                    request.dailyLoadMinutes,
+                  ),
+                },
+              ];
             }
           } else if (day.scheduledMinutes > 0 && day.capacityMinutes > 0) {
             break;

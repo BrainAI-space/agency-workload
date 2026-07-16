@@ -51,4 +51,24 @@ describe("weekly advisory forecast", () => {
       billableTargetGapMinutes: 0,
     });
   });
+
+  it("bases target gap only on confirmed billable work while potential includes all work", () => {
+    const forecast = calculateForecastWeek(
+      weekStart,
+      [
+        day({
+          capacityMinutes: 480,
+          billableConfirmedMinutes: 60,
+          internalConfirmedMinutes: 240,
+          tentativeBillableMinutes: 120,
+          tentativeInternalMinutes: 60,
+        }),
+      ],
+      75,
+    );
+
+    expect(forecast.confirmedUtilizationPercent).toBe(63);
+    expect(forecast.potentialUtilizationPercent).toBe(100);
+    expect(forecast.billableTargetGapMinutes).toBe(300);
+  });
 });

@@ -79,6 +79,7 @@ export const EarliestResultResponse = Type.Object(
     start: DateOnly,
     end: DateOnly,
     minimumHeadroomMinutes: Type.Integer(),
+    continuousAllocationSafe: Type.Boolean(),
     explanation: Type.String(),
   },
   { additionalProperties: false },

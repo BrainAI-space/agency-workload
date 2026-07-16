@@ -9,6 +9,8 @@ describe("responsive accessibility contract", () => {
     expect(css).toContain("min-height: 44px");
     expect(css).toContain(".mobile-nav");
     expect(css).toContain(".mobile-brief");
+    expect(css).toMatch(/\.sheet-backdrop\s*{[^}]*overscroll-behavior:\s*none/s);
+    expect(css).toMatch(/\.side-sheet\s*{[^}]*overscroll-behavior:\s*contain/s);
     expect(css).toContain("@media (prefers-reduced-motion: reduce)");
     expect(css).not.toMatch(/background:\s*linear-gradient/);
   });
@@ -25,5 +27,12 @@ describe("responsive accessibility contract", () => {
     ).join("\n");
     expect(source).not.toContain("dangerouslySetInnerHTML");
     expect(source).not.toContain("localStorage.setItem");
+  });
+
+  it("keeps forecast data semantic while treating the visual chart as decorative", async () => {
+    const source = await readFile(resolve(process.cwd(), "src/pages/planner-pages.tsx"), "utf8");
+    expect(source).toContain('aria-hidden="true"');
+    expect(source).toContain("Weekly forecast capacity and utilization");
+    expect(source).not.toContain('role="img"');
   });
 });

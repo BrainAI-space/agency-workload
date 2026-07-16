@@ -5,6 +5,12 @@ const Email = Type.String({
   minLength: 3,
   pattern: "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$",
 });
+const NonBlankName = (maxLength: number) =>
+  Type.String({
+    minLength: 1,
+    maxLength,
+    pattern: "^(?=[\\s\\S]*\\S)[\\s\\S]+$",
+  });
 export const RoleSchema = Type.Union([
   Type.Literal("owner"),
   Type.Literal("admin"),
@@ -71,7 +77,7 @@ export const PlanningSettingsBody = Type.Object(
       Type.Literal("MMM D, YYYY"),
       Type.Literal("YYYY-MM-DD"),
     ]),
-    forecastHorizonWeeks: Type.Integer({ minimum: 1, maximum: 104 }),
+    forecastHorizonWeeks: Type.Integer({ minimum: 13, maximum: 52 }),
     billableTargetPercent: Type.Integer({ minimum: 0, maximum: 100 }),
     rowVersion: RowVersionSchema,
   },
@@ -86,7 +92,7 @@ export const WeekdayScheduleSchema = Type.Object(
 );
 export const CreatePersonBody = Type.Object(
   {
-    name: Type.String({ minLength: 1, maxLength: 120 }),
+    name: NonBlankName(120),
     email: Type.Optional(Email),
     teamId: Type.Optional(UuidSchema),
     deliveryRoleId: Type.Optional(UuidSchema),
@@ -99,7 +105,7 @@ export const CreatePersonBody = Type.Object(
 );
 export const UpdatePersonBody = Type.Object(
   {
-    name: Type.String({ minLength: 1, maxLength: 120 }),
+    name: NonBlankName(120),
     email: Type.Optional(Type.Union([Email, Type.Null()])),
     teamId: Type.Optional(Type.Union([UuidSchema, Type.Null()])),
     deliveryRoleId: Type.Optional(Type.Union([UuidSchema, Type.Null()])),
@@ -127,7 +133,7 @@ export const ProjectStatusSchema = Type.Union([
 ]);
 export const CreateProjectBody = Type.Object(
   {
-    name: Type.String({ minLength: 1, maxLength: 160 }),
+    name: NonBlankName(160),
     kind: ProjectKindSchema,
     status: Type.Union([
       Type.Literal("draft"),
@@ -142,7 +148,7 @@ export const CreateProjectBody = Type.Object(
 );
 export const UpdateProjectBody = Type.Object(
   {
-    name: Type.String({ minLength: 1, maxLength: 160 }),
+    name: NonBlankName(160),
     kind: ProjectKindSchema,
     status: Type.Union([
       Type.Literal("draft"),
@@ -200,16 +206,25 @@ export const DateRangeQuery = Type.Object(
   { additionalProperties: false },
 );
 
-export const NameBody = Type.Object(
-  { name: Type.String({ minLength: 1, maxLength: 120 }) },
-  { additionalProperties: false },
-);
-export const UpdateNameBody = Type.Object(
-  { name: Type.String({ minLength: 1, maxLength: 120 }), rowVersion: RowVersionSchema },
-  { additionalProperties: false },
-);
+const createNameBody = (maxLength: number) =>
+  Type.Object({ name: NonBlankName(maxLength) }, { additionalProperties: false });
+const updateNameBody = (maxLength: number) =>
+  Type.Object(
+    { name: NonBlankName(maxLength), rowVersion: RowVersionSchema },
+    { additionalProperties: false },
+  );
+export const TeamOrRoleNameBody = createNameBody(100);
+export const UpdateTeamOrRoleNameBody = updateNameBody(100);
+export const TagNameBody = createNameBody(60);
+export const UpdateTagNameBody = updateNameBody(60);
+export const ClientNameBody = createNameBody(120);
+export const UpdateClientNameBody = updateNameBody(120);
+export const HolidayCalendarNameBody = createNameBody(100);
+export const UpdateHolidayCalendarNameBody = updateNameBody(100);
+export const LeaveTypeNameBody = createNameBody(80);
+export const UpdateLeaveTypeNameBody = updateNameBody(80);
 export const HolidayDateBody = Type.Object(
-  { date: LocalDateSchema, name: Type.String({ minLength: 1, maxLength: 120 }) },
+  { date: LocalDateSchema, name: NonBlankName(120) },
   { additionalProperties: false },
 );
 export const HolidayAssignmentBody = Type.Object(

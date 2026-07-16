@@ -97,6 +97,7 @@ export interface EarliestStartResult {
   personId: string;
   start: DateOrdinal;
   end: DateOrdinal;
+  continuousAllocationSafe: boolean;
 }
 
 export interface ForecastWeek {

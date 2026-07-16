@@ -111,6 +111,10 @@ REVOKE UPDATE, DELETE ON {{schema}}.audit_events FROM agency_workload_runtime;
 `;
 
 const down = `
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA {{schema}} FROM agency_workload_runtime;
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA {{schema}} FROM agency_workload_backup;
+REVOKE USAGE ON SCHEMA {{schema}} FROM agency_workload_runtime;
+REVOKE USAGE ON SCHEMA {{schema}} FROM agency_workload_backup;
 DROP TABLE IF EXISTS {{schema}}.audit_events CASCADE;
 DROP FUNCTION IF EXISTS {{schema}}.prevent_audit_mutation();
 DROP TABLE IF EXISTS {{schema}}.auth_requests CASCADE;
@@ -439,6 +443,10 @@ ALTER DEFAULT PRIVILEGES FOR ROLE agency_workload_migrator IN SCHEMA {{schema}}
 ALTER DEFAULT PRIVILEGES FOR ROLE agency_workload_migrator IN SCHEMA {{schema}}
   GRANT SELECT ON TABLES TO agency_workload_backup;`,
     down: `
+ALTER DEFAULT PRIVILEGES FOR ROLE agency_workload_migrator IN SCHEMA {{schema}}
+  REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLES FROM agency_workload_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE agency_workload_migrator IN SCHEMA {{schema}}
+  REVOKE SELECT ON TABLES FROM agency_workload_backup;
 DROP TABLE IF EXISTS {{schema}}.conflict_acknowledgements CASCADE;
 DROP TABLE IF EXISTS {{schema}}.allocations CASCADE;
 DROP TABLE IF EXISTS {{schema}}.projects CASCADE;
@@ -524,5 +532,40 @@ $$;
 CREATE UNIQUE INDEX holiday_calendars_active_name_idx
   ON {{schema}}.holiday_calendars(organization_id, lower(name)) WHERE archived_at IS NULL;`,
     down: `DROP INDEX IF EXISTS {{schema}}.holiday_calendars_active_name_idx;`,
+  },
+  {
+    id: "0008_forecast_horizon_v1_bounds",
+    up: `
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM {{schema}}.organization_planning_settings
+    WHERE forecast_horizon_weeks NOT BETWEEN 13 AND 52
+  ) THEN
+    RAISE EXCEPTION 'forecast horizon values outside 13-52 require operator resolution';
+  END IF;
+END;
+$$;
+ALTER TABLE {{schema}}.organization_planning_settings
+  DROP CONSTRAINT organization_planning_settings_forecast_horizon_weeks_check;
+ALTER TABLE {{schema}}.organization_planning_settings
+  ADD CONSTRAINT organization_planning_settings_forecast_horizon_v1_check
+  CHECK (forecast_horizon_weeks BETWEEN 13 AND 52);`,
+    down: `
+ALTER TABLE {{schema}}.organization_planning_settings
+  DROP CONSTRAINT organization_planning_settings_forecast_horizon_v1_check;
+ALTER TABLE {{schema}}.organization_planning_settings
+  ADD CONSTRAINT organization_planning_settings_forecast_horizon_weeks_check
+  CHECK (forecast_horizon_weeks BETWEEN 1 AND 104);`,
+  },
+  {
+    id: "0009_down_migration_checksums",
+    up: `
+ALTER TABLE {{schema}}.schema_migrations
+  ADD COLUMN IF NOT EXISTS down_checksum text
+  CHECK (down_checksum IS NULL OR length(down_checksum) = 64);`,
+    down: `
+-- Keep rollback-integrity metadata available while older migrations are rolled back.
+SELECT 1;`,
   },
 ];

@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { AppRole } from "@agency-workload/contracts";
-import { parseLocalDate } from "@agency-workload/domain";
 import type { Pool, PoolClient } from "pg";
 import type { SessionContext } from "./auth-service.js";
 import { HttpError } from "./errors.js";
+import { parsePlanningDate, validatePlanningRange } from "./planning-validation.js";
 
 const planningRoles: readonly AppRole[] = ["owner", "admin", "planner"];
 const structureRoles: readonly AppRole[] = ["owner", "admin"];
@@ -17,7 +17,7 @@ export interface LeaveInput {
 }
 
 function validateDates(start: string, end: string): void {
-  if (parseLocalDate(end) < parseLocalDate(start)) throw new HttpError(400, "invalid_date_range");
+  validatePlanningRange(start, end);
 }
 
 export class CalendarService {
@@ -56,12 +56,36 @@ export class CalendarService {
     rowVersion: number,
   ): Promise<void> {
     this.requireRole(actor, structureRoles);
-    await this.archiveNamed(actor, "holiday_calendars", "holiday_calendar", id, rowVersion);
+    await this.transaction(async (client) => {
+      const calendar = await client.query<{ row_version: number }>(
+        `SELECT row_version FROM app.holiday_calendars
+         WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL FOR UPDATE`,
+        [actor.organizationId, id],
+      );
+      const current = calendar.rows[0];
+      if (!current) {
+        return this.missingOrStale(client, "holiday_calendars", actor.organizationId, id);
+      }
+      if (current.row_version !== rowVersion) throw new HttpError(409, "stale_write");
+      const assigned = await client.query(
+        `SELECT 1 FROM app.person_holiday_calendars
+         WHERE organization_id = $1 AND calendar_id = $2 LIMIT 1`,
+        [actor.organizationId, id],
+      );
+      if (assigned.rowCount) throw new HttpError(409, "holiday_calendar_assigned");
+      await client.query(
+        `UPDATE app.holiday_calendars
+         SET archived_at = now(), row_version = row_version + 1
+         WHERE organization_id = $1 AND id = $2`,
+        [actor.organizationId, id],
+      );
+      await this.audit(client, actor, "holiday_calendar.archived", "holiday_calendar", id);
+    });
   }
 
   async addHolidayDate(actor: SessionContext, calendarId: string, date: string, name: string) {
     this.requireRole(actor, structureRoles);
-    parseLocalDate(date);
+    parsePlanningDate(date);
     return this.withConflict(
       this.transaction(async (client) => {
         await this.requireActive(client, "holiday_calendars", actor.organizationId, calendarId);
@@ -80,7 +104,7 @@ export class CalendarService {
 
   async removeHolidayDate(actor: SessionContext, calendarId: string, date: string): Promise<void> {
     this.requireRole(actor, structureRoles);
-    parseLocalDate(date);
+    parsePlanningDate(date);
     await this.transaction(async (client) => {
       const result = await client.query(
         `DELETE FROM app.holiday_dates
@@ -100,7 +124,7 @@ export class CalendarService {
     this.requireRole(actor, structureRoles);
     await this.transaction(async (client) => {
       await this.requireActive(client, "people", actor.organizationId, personId);
-      await this.requireActive(client, "holiday_calendars", actor.organizationId, calendarId);
+      await this.requireActive(client, "holiday_calendars", actor.organizationId, calendarId, true);
       await client.query(
         `INSERT INTO app.person_holiday_calendars (organization_id, person_id, calendar_id)
          VALUES ($1, $2, $3)
@@ -108,6 +132,19 @@ export class CalendarService {
         [actor.organizationId, personId, calendarId],
       );
       await this.audit(client, actor, "holiday_calendar.assigned", "person", personId);
+    });
+  }
+
+  async unassignHolidayCalendar(actor: SessionContext, personId: string): Promise<void> {
+    this.requireRole(actor, structureRoles);
+    await this.transaction(async (client) => {
+      const result = await client.query(
+        `DELETE FROM app.person_holiday_calendars
+         WHERE organization_id = $1 AND person_id = $2 RETURNING calendar_id`,
+        [actor.organizationId, personId],
+      );
+      if (!result.rowCount) throw new HttpError(404, "holiday_calendar_assignment_not_found");
+      await this.audit(client, actor, "holiday_calendar.unassigned", "person", personId);
     });
   }
 
@@ -363,9 +400,11 @@ export class CalendarService {
     table: "people" | "holiday_calendars" | "leave_types",
     organizationId: string,
     id: string,
+    lock = false,
   ): Promise<void> {
     const result = await client.query(
-      `SELECT 1 FROM app.${table} WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL`,
+      `SELECT 1 FROM app.${table}
+       WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL${lock ? " FOR UPDATE" : ""}`,
       [organizationId, id],
     );
     if (!result.rowCount) throw new HttpError(404, "not_found");
